@@ -6,5 +6,8 @@
   "scripts": {
     "serve": "node tools/serve.mjs",
     "build": "node tools/build.mjs"
+  },
+  "devDependencies": {
+    "ffmpeg-static": "^5.2.0"
   }
 }
