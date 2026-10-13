@@ -1,0 +1,10 @@
+{
+  "name": "space-commander",
+  "version": "1.0.0",
+  "private": true,
+  "description": "RTS для Яндекс Игр (Three.js)",
+  "scripts": {
+    "serve": "node tools/serve.mjs",
+    "build": "node tools/build.mjs"
+  }
+}

@@ -1,0 +1,96 @@
+{
+  "name": "Original Sci-Fi RTS Detailed GLB Pack",
+  "asset_count": 22,
+  "coordinate_system": "Y-up, forward -Z",
+  "assets": {
+    "cc": {
+      "file": "cc.glb",
+      "category": "building"
+    },
+    "barracks": {
+      "file": "barracks.glb",
+      "category": "building"
+    },
+    "factory": {
+      "file": "factory.glb",
+      "category": "building"
+    },
+    "starport": {
+      "file": "starport.glb",
+      "category": "building"
+    },
+    "storage": {
+      "file": "storage.glb",
+      "category": "building"
+    },
+    "bunker": {
+      "file": "bunker.glb",
+      "category": "building"
+    },
+    "sensor": {
+      "file": "sensor.glb",
+      "category": "building"
+    },
+    "turret": {
+      "file": "turret.glb",
+      "category": "building"
+    },
+    "engineering": {
+      "file": "engineering.glb",
+      "category": "building"
+    },
+    "armory": {
+      "file": "armory.glb",
+      "category": "building"
+    },
+    "refinery": {
+      "file": "refinery.glb",
+      "category": "building"
+    },
+    "marine": {
+      "file": "marine.glb",
+      "category": "unit"
+    },
+    "marauder": {
+      "file": "marauder.glb",
+      "category": "unit"
+    },
+    "ghost": {
+      "file": "ghost.glb",
+      "category": "unit"
+    },
+    "medic": {
+      "file": "medic.glb",
+      "category": "unit"
+    },
+    "hellion": {
+      "file": "hellion.glb",
+      "category": "unit"
+    },
+    "tank": {
+      "file": "tank.glb",
+      "category": "unit"
+    },
+    "thor": {
+      "file": "thor.glb",
+      "category": "unit"
+    },
+    "viking": {
+      "file": "viking.glb",
+      "category": "unit"
+    },
+    "banshee": {
+      "file": "banshee.glb",
+      "category": "unit"
+    },
+    "battlecruiser": {
+      "file": "battlecruiser.glb",
+      "category": "unit"
+    },
+    "scv": {
+      "file": "scv.glb",
+      "category": "unit"
+    }
+  },
+  "note": "Original procedural low-poly models with layered armor, vents, wheels, panels and PBR materials. Static meshes; no embedded skeletal animation clips."
+}

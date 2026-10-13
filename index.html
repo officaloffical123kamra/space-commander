@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <title>SPACE COMMANDER</title>
+  <!-- Yandex Games SDK: на платформе доступен по относительному пути; локально файла нет — игра работает без SDK -->
+  <script src="/sdk.js"></script>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <canvas id="menu-canvas"></canvas>
+
+  <div id="attack-cursor">🎯</div>
+
+  <div id="hud" class="hidden">
+    <div class="res"><span class="icon mineral">◆</span><span id="minerals">0</span></div>
+    <div class="res"><span class="icon vespene">⬢</span><span id="vespene">0</span></div>
+    <div class="res"><span class="icon army">👥</span><span id="army">0 / 20</span></div>
+    <button id="btn-sound" class="sound-btn">🔊</button>
+    <button id="btn-pause" class="sound-btn">⏸</button>
+  </div>
+
+  <div id="wave-panel" class="hidden">
+    <div class="wave-title">ВОЛНА <span id="wave-number">0</span></div>
+    <div class="wave-progress"><div id="wave-progress-fill"></div></div>
+    <div class="wave-eta">До атаки: <span id="wave-eta">--</span></div>
+  </div>
+
+  <div id="bottom-bar" class="hidden">
+    <div id="minimap-wrap">
+      <canvas id="minimap" width="200" height="200"></canvas>
+    </div>
+
+    <div id="portrait">
+      <div id="portrait-icon">❔</div>
+      <div id="portrait-info">
+        <div id="portrait-name">Ничего не выбрано</div>
+        <div id="portrait-hp-bar"><div id="portrait-hp-fill"></div></div>
+        <div id="portrait-hp-text"></div>
+        <div id="portrait-hint"></div>
+      </div>
+    </div>
+
+    <div id="actions-area">
+      <div id="combat-panel" class="panel-section">
+        <div class="section-label" id="combat-label">Бой</div>
+        <div class="section-row" id="combat-row"></div>
+      </div>
+
+      <div id="context-panel" class="panel-section">
+        <div class="section-label" id="context-label">Действия</div>
+        <div class="section-row" id="context-row"></div>
+      </div>
+
+      <div id="build-panel" class="panel-section hidden">
+        <div class="section-label">
+          <span>Постройки</span>
+          <span id="build-tabs">
+            <button class="tab-btn active" data-tab="main">Основные</button>
+            <button class="tab-btn" data-tab="extra">Доп.</button>
+          </span>
+        </div>
+        <div class="section-row" id="build-row"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="touch-toolbar" class="hidden">
+    <button id="tb-army" class="tb-btn" title="Выделить армию">⚔<span>Армия</span></button>
+    <button id="tb-workers" class="tb-btn" title="Выделить рабочих">👷<span>Рабочие</span></button>
+    <button id="tb-box" class="tb-btn" title="Выделение рамкой">⬚<span>Рамка</span></button>
+    <button id="tb-deselect" class="tb-btn" title="Сбросить">✖<span>Сброс</span></button>
+  </div>
+
+  <div id="loading" class="hidden"><div class="loading-text">Загрузка…</div></div>
+
+  <div id="rotate-hint">
+    <div class="rotate-icon">📱↻</div>
+    <div>Поверните устройство горизонтально</div>
+  </div>
+
+  <div id="selection-box"></div>
+  <div id="hint"></div>
+
+  <div id="gameover">
+    <div id="gameover-box">
+      <div id="gameover-title">Победа!</div>
+      <div id="gameover-subtitle">База противника уничтожена</div>
+      <div class="gameover-buttons">
+        <button id="gameover-restart">Играть снова</button>
+        <button id="gameover-menu">В меню</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="pause-screen" class="menu-screen hidden">
+    <div class="menu-content">
+      <h2 class="menu-title small">Пауза</h2>
+      <div class="menu-buttons">
+        <button id="pause-resume" class="menu-btn primary">▶ Продолжить</button>
+        <button id="pause-settings" class="menu-btn">⚙ Настройки</button>
+        <button id="pause-controls" class="menu-btn">🎮 Управление</button>
+        <button id="pause-menu" class="menu-btn">🏠 Выйти в меню</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="controls-screen" class="menu-screen hidden">
+    <div class="menu-content">
+      <h2 class="menu-title small">Управление</h2>
+      <div class="about-text">
+        <div class="touch-only">
+          <p><b>Сенсорный экран</b></p>
+          <ul>
+            <li><b>Тап по своему юниту</b> — выделить (двойной тап — всех таких же)</li>
+            <li><b>Тап по земле / врагу / минералам</b> — приказ выделенным</li>
+            <li><b>Тап по зданию</b> — выделить здание; затем тап по земле — точка сбора</li>
+            <li><b>Провести пальцем</b> — двигать камеру, <b>два пальца</b> — масштаб</li>
+            <li><b>Кнопки справа</b> — армия, рабочие, рамка, сброс выделения</li>
+            <li><b>Миникарта</b> — коснитесь, чтобы перейти</li>
+          </ul>
+        </div>
+        <div class="desktop-only">
+        <p><b>Камера</b></p>
+        <ul>
+          <li><b>W / A / S / D</b> или стрелки — движение камеры</li>
+          <li><b>Колесо мыши</b> — приближение / отдаление</li>
+          <li><b>Клик по миникарте</b> — камера прыгает туда</li>
+        </ul>
+        <p><b>Выделение</b></p>
+        <ul>
+          <li><b>ЛКМ</b> — выделить юнита / здание</li>
+          <li><b>Двойной ЛКМ</b> — выделить всех таких же на экране</li>
+          <li><b>Зажать ЛКМ и тянуть</b> — рамка выделения</li>
+          <li><b>1-9</b> — выбрать группу</li>
+          <li><b>Ctrl + 1-9</b> — сохранить выделение в группу</li>
+          <li><b>Двойной клик по цифре</b> — камера к группе</li>
+        </ul>
+        <p><b>Приказы</b></p>
+        <ul>
+          <li><b>ПКМ</b> — идти / атаковать / добывать</li>
+          <li><b>ПКМ по своему зданию</b> — идти к нему</li>
+          <li><b>ПКМ при выделенном здании</b> — точка сбора</li>
+          <li><b>Q</b> — режим атаки (потом ЛКМ по цели)</li>
+          <li><b>S</b> — стоп</li>
+          <li><b>T</b> — осадный режим (танк)</li>
+          <li><b>V</b> — трансформация (викинг)</li>
+          <li><b>X</b> — super-shot (призрак)</li>
+          <li><b>ESC</b> — пауза</li>
+        </ul>
+        </div>
+      </div>
+      <div class="menu-buttons">
+        <button id="controls-back" class="menu-btn">← Назад</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="main-menu" class="menu-screen">
+    <div class="menu-content">
+      <h1 class="menu-title">SPACE COMMANDER</h1>
+      <div class="menu-subtitle">RTS Prototype</div>
+      <div class="menu-buttons">
+        <button id="menu-play" class="menu-btn primary">▶ Кампания</button>
+        <button id="menu-skirmish" class="menu-btn">⚔ Схватка</button>
+        <button id="menu-shop" class="menu-btn">🛒 Магазин</button>
+        <button id="menu-achievements" class="menu-btn">🏅 Достижения</button>
+        <button id="menu-settings" class="menu-btn">⚙ Настройки</button>
+        <button id="menu-about" class="menu-btn">ℹ Об игре</button>
+      </div>
+      <div class="menu-footer">v1.0</div>
+    </div>
+  </div>
+
+  <div id="campaign-screen" class="menu-screen hidden">
+    <div class="menu-content wide">
+      <h2 class="menu-title small">КАМПАНИЯ</h2>
+      <div id="campaign-list" class="map-list"></div>
+      <div class="menu-buttons">
+        <button id="campaign-back" class="menu-btn">← Назад</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="map-screen" class="menu-screen hidden">
+    <div class="menu-content wide">
+      <h2 class="menu-title small">Схватка</h2>
+      <div id="map-list" class="map-list"></div>
+      <div class="menu-buttons">
+        <button id="map-back" class="menu-btn">← Назад</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="settings-screen" class="menu-screen hidden">
+    <div class="menu-content">
+      <h2 class="menu-title small">Настройки</h2>
+      <div class="settings-list">
+        <div class="setting-row">
+          <label>Громкость музыки</label>
+          <input type="range" id="opt-music-volume" min="0" max="100" value="35">
+          <span class="setting-value" id="opt-music-volume-label">35%</span>
+        </div>
+        <div class="setting-row">
+          <label>Громкость звуков</label>
+          <input type="range" id="opt-sfx-volume" min="0" max="100" value="70">
+          <span class="setting-value" id="opt-sfx-volume-label">70%</span>
+        </div>
+        <div class="setting-row">
+          <label>Скорость игры</label>
+          <input type="range" id="opt-game-speed" min="50" max="150" value="75">
+          <span class="setting-value" id="opt-game-speed-label">0.75x</span>
+        </div>
+        <div class="setting-row">
+          <label>Туман войны</label>
+          <input type="checkbox" id="opt-fog" checked>
+          <span class="setting-value"></span>
+        </div>
+      </div>
+      <div class="menu-buttons">
+        <button id="settings-back" class="menu-btn">← Назад</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="about-screen" class="menu-screen hidden">
+    <div class="menu-content">
+      <h2 class="menu-title small">Об игре</h2>
+      <div class="about-text">
+        <p><b>SPACE COMMANDER</b> — RTS-прототип в стиле StarCraft 2.</p>
+        <p>Управляйте рабочими, стройте здания, производите армию и уничтожьте базу противника.</p>
+        <p class="touch-only">На телефоне: тап — выделить или отдать приказ, палец — камера, два пальца — масштаб.</p>
+        <ul class="desktop-only">
+          <li><b>ЛКМ</b> — выделить юнита / здание</li>
+          <li><b>ПКМ</b> — идти / атаковать / добывать</li>
+          <li><b>Q</b> — атака, <b>S</b> — стоп</li>
+          <li><b>T</b> — осада, <b>V</b> — форма</li>
+          <li><b>1-9</b> — группы, <b>Ctrl+1-9</b> — сохранить</li>
+          <li><b>ESC</b> — пауза</li>
+        </ul>
+      </div>
+      <div class="menu-buttons">
+        <button id="about-back" class="menu-btn">← Назад</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./js/three.module.js",
+      "three/addons/": "./js/addons/"
+    }
+  }
+  </script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

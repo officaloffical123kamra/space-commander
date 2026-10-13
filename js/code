@@ -1,0 +1,21 @@
+//localStorage.removeItem('rts_progress'); location.reload(); - 
+//сброс прогресса
+
+
+
+/*const p = JSON.parse(localStorage.getItem('rts_progress') || '{}');
+p.money = 999999;
+localStorage.setItem('rts_progress', JSON.stringify(p));
+location.reload(); */
+//бабки
+
+
+/*const p = JSON.parse(localStorage.getItem('rts_progress') || '{}');
+if (!p.campaign) p.campaign = { completed: [], difficulty: 'normal' };
+for (let i = 1; i <= 40; i++) {
+  if (!p.campaign.completed.includes(i)) p.campaign.completed.push(i);
+}
+p.money = 999999;
+localStorage.setItem('rts_progress', JSON.stringify(p));
+location.reload();*/
+//миссии
