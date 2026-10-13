@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { isFriendly } from './session.js';
 
 const MAP_SIZE = 60;
 const GRID = 60;
@@ -49,17 +50,17 @@ export function updateFog(units, buildings, commandCenters) {
   for (const u of units) {
     if (!u || !u.mesh) continue;
     if (u.inBunker) continue;
-    if (!u.isPlayer) continue;
+    if (!isFriendly(u)) continue;
     seers.push({ x: u.mesh.position.x, z: u.mesh.position.z, r: u.sight || 8 });
   }
   for (const b of buildings) {
     if (!b || !b.mesh) continue;
-    if ((b.owner || 'player') !== 'player') continue;
+    if (!isFriendly(b)) continue;
     seers.push({ x: b.mesh.position.x, z: b.mesh.position.z, r: b.sight || 10 });
   }
   for (const cc of commandCenters) {
     if (!cc || !cc.mesh) continue;
-    if ((cc.owner || 'player') !== 'player') continue;
+    if (!isFriendly(cc)) continue;
     seers.push({ x: cc.mesh.position.x, z: cc.mesh.position.z, r: cc.sight || 11 });
   }
 

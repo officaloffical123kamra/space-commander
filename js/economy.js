@@ -5,6 +5,8 @@ import { getModel, hasModel } from './models.js';
 import { getHeight } from './terrain.js';
 import { drawMineralLabel, drawGasLabel } from './scene.js';
 import { findNearestMineralPatch, findNearestCC } from './world.js';
+import { session, ctrlOf, tintFor } from './session.js';
+import { assignId } from './ids.js';
 
 // Поле может опустеть — тогда рабочий ищет следующее не дальше этого
 const MINERAL_SEARCH_RADIUS = 20;
@@ -19,27 +21,52 @@ export const state = {
   armyEl: null
 };
 
+// Ресурсы второго игрока (игра по сети). У хоста/одиночной игры — state.
+// У друга на его компьютере state заполняется данными с хоста.
+export const state2 = {
+  minerals: 1000,
+  vespene: 1000,
+  armyUsed: 0,
+  armyMax: 20
+};
+
+// Кошелёк управляющего: 'p1' → state, 'p2' → state2, бот — null
+export function getEco(ctrl) {
+  if (ctrl === 'p1') return state;
+  if (ctrl === 'p2') return state2;
+  return null;
+}
+
 export function updateHud() {
-  if (state.mineralsEl) state.mineralsEl.textContent = state.minerals;
-  if (state.vespeneEl)  state.vespeneEl.textContent  = state.vespene;
+  if (state.mineralsEl) state.mineralsEl.textContent = Math.floor(state.minerals);
+  if (state.vespeneEl)  state.vespeneEl.textContent  = Math.floor(state.vespene);
   updateArmyHud();
 }
 
-export function updateArmyHud() {
+export function countArmy(ctrl) {
   let used = 0;
   for (const u of units) {
-    if (u.isPlayer) used++;
+    if (u.hp > 0 && !u.dead && ctrlOf(u) === ctrl) used++;
   }
+  return used;
+}
+
+export function updateArmyHud() {
+  const used = countArmy(session.localCtrl);
   state.armyUsed = used;
   if (state.armyEl) state.armyEl.textContent = `${used} / ${state.armyMax}`;
 }
 
-export function hasArmyRoom() {
-  return state.armyUsed < state.armyMax;
+export function hasArmyRoom(ctrl = 'p1') {
+  const eco = getEco(ctrl);
+  if (!eco) return true;
+  return countArmy(ctrl) < eco.armyMax;
 }
 
-export function addArmyMax(amount) {
-  state.armyMax += amount;
+export function addArmyMax(amount, ctrl = 'p1') {
+  const eco = getEco(ctrl);
+  if (!eco) return;
+  eco.armyMax += amount;
   updateArmyHud();
 }
 
@@ -56,7 +83,9 @@ function makeCarryCrystal(color = 0x4ea6ff) {
   return crystal;
 }
 
-export function createWorker(scene, cc, minerals, isPlayer = true, startX = null) {
+export function createWorker(scene, cc, minerals, isPlayer = true, startX = null, ctrl = null) {
+  if (!ctrl) ctrl = (cc && cc.ctrl) || (isPlayer ? 'p1' : 'ai');
+  const tint = tintFor(isPlayer ? 'player' : 'bot', ctrl);
   let mesh;
 
   if (hasModel('scv')) {
@@ -73,8 +102,8 @@ export function createWorker(scene, cc, minerals, isPlayer = true, startX = null
   mesh.traverse((child) => {
     if (child.isMesh && child.material) {
       child.material = child.material.clone();
-      if (!isPlayer && child.material.color) {
-        child.material.color.lerp(new THREE.Color(0xaa3333), 0.4);
+      if (tint !== null && child.material.color) {
+        child.material.color.lerp(new THREE.Color(tint), 0.4);
       }
     }
   });
@@ -108,6 +137,7 @@ export function createWorker(scene, cc, minerals, isPlayer = true, startX = null
     isWorker: true,
     type: 'scv',
     owner: isPlayer ? 'player' : 'bot',
+    ctrl,
     hp: 40,
     maxHp: 40,
     state: 'to_minerals',
@@ -130,6 +160,7 @@ export function createWorker(scene, cc, minerals, isPlayer = true, startX = null
 
   if (!worker.minerals) worker.state = 'idle';
   drawHpBar(worker);
+  assignId(worker);
   units.push(worker);
   return worker;
 }
@@ -286,7 +317,8 @@ export function updateWorker(worker, dt) {
       const cc = getHomeCC(worker);
       if (!cc) { worker.state = 'idle'; return; }
       if (stepTowards(cc.x + 2, cc.z)) {
-        if (worker.isPlayer) { state.vespene += 6; updateHud(); }
+        const eco = getEco(worker.ctrl);
+        if (eco) { eco.vespene += 6; if (eco === state) updateHud(); }
         else if (worker.onDeliverGas) worker.onDeliverGas(6);
         worker.state = 'gas_to';
         hideCarry();
@@ -343,7 +375,8 @@ export function updateWorker(worker, dt) {
     const cc = getHomeCC(worker);
     if (!cc) { worker.state = 'idle'; return; }
     if (stepTowards(cc.x + 2, cc.z)) {
-      if (worker.isPlayer) { state.minerals += 8; updateHud(); }
+      const eco = getEco(worker.ctrl);
+      if (eco) { eco.minerals += 8; if (eco === state) updateHud(); }
       else if (worker.onDeliver) worker.onDeliver(8);
       worker.state = 'to_minerals';
       hideCarry();

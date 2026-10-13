@@ -2,6 +2,8 @@
 import * as THREE from 'three';
 import { availableUnits, upgrades, COSTS, getWeaponBonus, getArmorReduction, canBuildType, getMissingRequirement, BUILDING_NAMES } from './build.js';
 import { inputText } from './ui.js';
+import { session, isMine, isFriendly, teamOf } from './session.js';
+import { getUpgrades } from './upgrades.js';
 import { playClick } from './audio.js';
 
 export const selection = { units: [], building: null };
@@ -170,7 +172,8 @@ export function updatePortrait() {
   if (selection.building) {
     const b = selection.building;
     let txt = BUILDING_NAMES[b.type] || b.type;
-    if (b.owner === 'bot') txt = 'Враг: ' + txt;
+    if (!isFriendly(b)) txt = 'Враг: ' + txt;
+    else if (!isMine(b)) txt = 'Союзник: ' + txt;
     if (b.hasReactor) txt += ' [+Реактор]';
     if (b.hasTechlab) txt += ' [+Тех-лаб]';
     if (b.type === 'bunker') txt += ` (${b.garrison.length}/${b.maxGarrison})`;
@@ -432,7 +435,7 @@ export function updateActionsPanel() {
 
   if (selection.building) {
     const b = selection.building;
-    if (b.owner === 'bot') { label.textContent = 'Здание врага'; return; }
+    if (!isMine(b)) { label.textContent = isFriendly(b) ? 'Здание союзника' : 'Здание врага'; return; }
 
     if (b.type === 'cc') {
       label.textContent = 'Командный центр';
@@ -465,14 +468,16 @@ export function updateActionsPanel() {
     }
     if (b.type === 'engineering') {
       label.textContent = `Инж. комплекс — Апгрейды (до 5)`;
-      row.appendChild(makeUpgBtn('🔫', 'Оружие пехоты', upgrades.infantryWeapon, 'upgInfWeapon'));
-      row.appendChild(makeUpgBtn('🛡', 'Броня пехоты',  upgrades.infantryArmor,  'upgInfArmor'));
+      const myUpg = getUpgrades(session.localTeam);
+      row.appendChild(makeUpgBtn('🔫', 'Оружие пехоты', myUpg.infantryWeapon, 'upgInfWeapon'));
+      row.appendChild(makeUpgBtn('🛡', 'Броня пехоты',  myUpg.infantryArmor,  'upgInfArmor'));
       return;
     }
     if (b.type === 'armory') {
       label.textContent = `Арсенал — Апгрейды техники (до 5)`;
-      row.appendChild(makeUpgBtn('🔫', 'Оружие техники', upgrades.vehicleWeapon, 'upgVehWeapon'));
-      row.appendChild(makeUpgBtn('🛡', 'Броня техники',  upgrades.vehicleArmor,  'upgVehArmor'));
+      const myUpg = getUpgrades(session.localTeam);
+      row.appendChild(makeUpgBtn('🔫', 'Оружие техники', myUpg.vehicleWeapon, 'upgVehWeapon'));
+      row.appendChild(makeUpgBtn('🛡', 'Броня техники',  myUpg.vehicleArmor,  'upgVehArmor'));
       return;
     }
     if (b.type === 'bunker') {
@@ -531,11 +536,13 @@ export function updateActionsPanel() {
         <div>⚙ Скорость: ${u.speed}</div>
       `;
     } else {
-      const wBonus = getWeaponBonus(u.type);
-      const aBonus = getArmorReduction(u.type);
+      const team = teamOf(u);
+      const upg = getUpgrades(team);
+      const wBonus = getWeaponBonus(u.type, team);
+      const aBonus = getArmorReduction(u.type, team);
       const isVehicle = ['hellion','tank','thor','viking','banshee','battlecruiser'].includes(u.type);
-      const lvlW = isVehicle ? upgrades.vehicleWeapon : upgrades.infantryWeapon;
-      const lvlA = isVehicle ? upgrades.vehicleArmor  : upgrades.infantryArmor;
+      const lvlW = isVehicle ? upg.vehicleWeapon : upg.infantryWeapon;
+      const lvlA = isVehicle ? upg.vehicleArmor  : upg.infantryArmor;
 
       card.innerHTML = `
         <div>❤ HP: ${Math.ceil(u.hp)} / ${u.maxHp}</div>

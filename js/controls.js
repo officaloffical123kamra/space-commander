@@ -8,14 +8,14 @@
 //  - протянуть одним пальцем — двигать камеру; двумя — масштаб;
 //  - кнопки на панели: «Армия», «Рабочие», «Рамка», «Сброс».
 import * as THREE from 'three';
-import { units, toggleSiege, toggleTransform, useSuperShot } from './units.js';
+import { units } from './units.js';
 import {
-  buildings, commandCenters, startConstruction, queueUnit, queueScv, attachAddon,
-  buyUpgrade, orderGarrison, ungarrisonAll, canBuildType, getMissingRequirement,
-  canPlaceBuilding, cancelConstruction, startRepair, cancelRepair, repairs
+  buildings, commandCenters, canBuildType, getMissingRequirement, canPlaceBuilding, COSTS
 } from './build.js';
 import { selection, clearSelection, selectUnits, selectBuilding, setActionHandlers } from './selection.js';
-import { state, updateHud, orderMove, orderMineMinerals, orderMineGas } from './economy.js';
+import { state } from './economy.js';
+import { issue } from './commands.js';
+import { isMine, isFriendly } from './session.js';
 import { playClick, playSelect, playOrder, playSound, playExplosion } from './audio.js';
 import { hasModel, getModel } from './models.js';
 import { mineralPatches, geysers } from './world.js';
@@ -27,7 +27,7 @@ const MIN_ZOOM = 8;
 const MAX_ZOOM = 40;
 const DOUBLE_CLICK_MS = 350;
 const TAP_MOVE_PX = 12;
-const TOUCH_PICK_RADIUS = 1.3; // мир. ед. — палец толще курсора
+const TOUCH_PICK_RADIUS = 1.6; // мир. ед. — палец толще курсора
 
 export function setupControls(camera, renderer, scene) {
   const canvas = renderer.domElement;
@@ -177,7 +177,7 @@ export function setupControls(camera, renderer, scene) {
   }
 
   function isOwn(b) {
-    return b && (b.owner === 'player' || b.owner === undefined);
+    return !!b && isMine(b);
   }
 
   function findOwner(obj, list) {
@@ -209,7 +209,9 @@ export function setupControls(camera, renderer, scene) {
     let best = null;
     let bestD = TOUCH_PICK_RADIUS * (camera.position.y / 18);
     for (const u of candidates) {
-      const d = Math.hypot(u.mesh.position.x - g.x, u.mesh.position.z - g.z);
+      let d = Math.hypot(u.mesh.position.x - g.x, u.mesh.position.z - g.z);
+      // У друга по сети модель плавно догоняет реальную позицию — учитываем обе
+      if (u._net) d = Math.min(d, Math.hypot(u._net.x - g.x, u._net.z - g.z));
       if (d < bestD) { bestD = d; best = u; }
     }
     return best;
@@ -329,13 +331,20 @@ export function setupControls(camera, renderer, scene) {
     syncModeUI();
   }
 
+  const ids = (list) => list.map((u) => u.id);
+
   function stopSelected() {
-    for (const u of selection.units) {
-      u.target = null;
-      u.attackTarget = null;
-      u.goingToBunker = null;
-      u.autoAttackDisabled = false;
-    }
+    if (selection.units.length) issue({ c: 'stop', ids: ids(selection.units) });
+  }
+
+  function siegeSelected() {
+    const list = selection.units.filter((u) => u.canSiege);
+    if (list.length) issue({ c: 'siege', ids: ids(list) });
+  }
+
+  function transformSelected() {
+    const list = selection.units.filter((u) => u.canTransform);
+    if (list.length) issue({ c: 'transform', ids: ids(list) });
   }
 
   // ============================================================
@@ -345,31 +354,25 @@ export function setupControls(camera, renderer, scene) {
   setActionHandlers({
     attack: () => { if (selection.units.length > 0) enterAttackMode(); },
     stop: stopSelected,
-    siege: () => { for (const u of selection.units) if (u.canSiege) toggleSiege(u); },
-    transform: () => { for (const u of selection.units) if (u.canTransform) toggleTransform(u); },
+    siege: siegeSelected,
+    transform: transformSelected,
     mineHint: () => showHintLocal(inputText('ПКМ по минералам или рефайнери', 'Коснитесь минералов или рефайнери')),
     superShot: enterSnipeMode,
     repair: enterRepairMode,
     cancelRepair: (repair) => {
       playClick();
-      cancelRepair(repair);
-      const idx = repairs.indexOf(repair);
-      if (idx >= 0) repairs.splice(idx, 1);
+      if (repair && repair.worker) issue({ c: 'cancelRepair', worker: repair.worker.id });
     },
     produce: (type, building) => {
       playClick();
-      if (type === 'scv') queueScv(scene, building);
-      else queueUnit(building, type);
+      issue({ c: 'produce', building: building.id, utype: type });
     },
     addon: (type, building) => {
       playClick();
       if (building.addonTaken) { showHintLocal('Уже есть пристройка'); return; }
-      const cost = type === 'reactor' ? { minerals: 50, vespene: 50 } : { minerals: 100, vespene: 100 };
-      if (state.minerals < cost.minerals || state.vespene < cost.vespene) { showHintLocal('Мало ресурсов'); return; }
-      state.minerals -= cost.minerals; state.vespene -= cost.vespene; updateHud();
-      attachAddon(scene, building, type);
-      selectBuilding(building);
-      showHintLocal(type === 'reactor' ? 'Реактор установлен' : 'Тех-лаб установлен');
+      issue({ c: 'addon', building: building.id, atype: type });
+      // Панель обновится, когда пристройка появится
+      setTimeout(() => { if (selection.building === building) selectBuilding(building); }, 250);
     },
     build: (type) => {
       playClick();
@@ -382,17 +385,17 @@ export function setupControls(camera, renderer, scene) {
     },
     upgrade: (upgType) => {
       playClick();
-      buyUpgrade(upgType);
+      issue({ c: 'upgrade', utype: upgType });
     },
     ungarrison: (bunker) => {
       playClick();
-      ungarrisonAll(scene, bunker);
+      issue({ c: 'ungarrison', bunker: bunker.id });
       showHintLocal('Юниты высажены');
     },
     cancelConstruction: (construction) => {
       playClick();
       playExplosion();
-      cancelConstruction(scene, construction);
+      if (construction && construction.scv) issue({ c: 'cancelConstruction', worker: construction.scv.id });
       clearSelection();
     }
   });
@@ -404,11 +407,12 @@ export function setupControls(camera, renderer, scene) {
   // ЛКМ/тап в активном режиме. true — режим обработал нажатие.
   function handleModeClick(clientX, clientY) {
     if (snipeMode) {
-      const target = pickUnit(clientX, clientY, u => !u.isPlayer);
+      const target = pickUnit(clientX, clientY, u => !isFriendly(u));
       if (target) {
-        let fired = false;
-        for (const u of selection.units) if (u.superShot && useSuperShot(scene, u, target)) fired = true;
-        if (!fired) showHintLocal('Цель далеко или super-shot перезаряжается');
+        const ghosts = selection.units.filter((u) => u.superShot);
+        const inRange = ghosts.some((u) => u.mesh.position.distanceTo(target.mesh.position) <= u.superShot.range);
+        if (!inRange) showHintLocal('Цель слишком далеко для super-shot');
+        else issue({ c: 'superShot', ids: ids(ghosts), target: target.id });
       }
       snipeMode = false;
       hideHint();
@@ -426,31 +430,26 @@ export function setupControls(camera, renderer, scene) {
       const worker = selection.units.find(u => u.isWorker && !u.construction && !u.repairJob);
       if (!worker) { showHintLocal('Нет свободного КСМ'); return true; }
       if (state.minerals < 1) { showHintLocal('Мало минералов'); return true; }
-      if (startRepair(scene, b, worker)) {
-        showHintLocal('КСМ идёт ремонтировать');
-        playSound('build_start');
-      }
+      issue({ c: 'repair', worker: worker.id, building: b.id });
+      showHintLocal('КСМ идёт ремонтировать');
+      playSound('build_start');
       return true;
     }
 
     if (attackMode) {
-      const targetUnit = pickUnit(clientX, clientY, u => !u.isPlayer);
+      const targetUnit = pickUnit(clientX, clientY, u => !isFriendly(u));
       const targetBld = targetUnit ? null : pickBuilding(clientX, clientY);
-      const enemyBld = targetBld && !isOwn(targetBld) ? targetBld : null;
+      const enemyBld = targetBld && !isFriendly(targetBld) ? targetBld : null;
       const hit = groundAt(clientX, clientY);
-      for (const u of selection.units) {
-        if (u.isWorker || u.inBunker || u.isHealer) continue;
-        u.goingToBunker = null;
-        u.autoAttackDisabled = false;
-        if (targetUnit || enemyBld) {
-          u.attackTarget = targetUnit || enemyBld;
-          u.target = null;
-        } else if (hit) {
-          u.attackTarget = null;
-          u.target = { x: hit.x, y: 0, z: hit.z };
-          drawPathLine(u.mesh.position, hit, 0xff4444);
+      const fighters = selection.units.filter((u) => !u.isWorker && !u.inBunker && !u.isHealer);
+      if (fighters.length) {
+        const t = targetUnit || enemyBld;
+        if (t) issue({ c: 'attack', ids: ids(fighters), target: t.id });
+        else if (hit) {
+          issue({ c: 'attackMove', ids: ids(fighters), x: hit.x, z: hit.z });
+          for (const u of fighters) drawPathLine(u.mesh.position, hit, 0xff4444);
         }
-        playSound('voice_' + u.type + '_order');
+        playSound('voice_' + fighters[0].type + '_order');
       }
       cancelAttackMode();
       hideHint();
@@ -475,8 +474,11 @@ export function setupControls(camera, renderer, scene) {
           if (d < bestDist) { bestDist = d; closest = g; }
         }
         if (!closest) { showHintLocal(inputText('Наведите на гейзер', 'Коснитесь гейзера')); return true; }
-        const r = startConstruction(scene, 'refinery', closest.x, closest.z, worker);
-        if (r.ok) { cancelAllModes(); playSound('build_start'); }
+        if (!canPlaceBuilding(scene, 'refinery', closest.x, closest.z)) { showHintLocal('Гейзер уже занят'); return true; }
+        if (!canAffordLocal('refinery')) { showHintLocal('Мало ресурсов'); return true; }
+        issue({ c: 'build', worker: worker.id, btype: 'refinery', geyser: geysers.indexOf(closest) });
+        cancelAllModes();
+        playSound('build_start');
         return true;
       }
 
@@ -484,23 +486,31 @@ export function setupControls(camera, renderer, scene) {
         showHintLocal('Здесь нельзя строить');
         return true;
       }
-      const r = startConstruction(scene, buildMode, gridX, gridZ, worker);
-      if (r.ok) { cancelAllModes(); showHintLocal('КСМ строит...'); playSound('build_start'); }
+      if (!canAffordLocal(buildMode)) { showHintLocal('Мало ресурсов'); return true; }
+      issue({ c: 'build', worker: worker.id, btype: buildMode, x: gridX, z: gridZ });
+      cancelAllModes();
+      showHintLocal('КСМ строит...');
+      playSound('build_start');
       return true;
     }
 
     return false;
   }
 
+  function canAffordLocal(type) {
+    const c = COSTS[type];
+    return !c || (state.minerals >= c.minerals && state.vespene >= c.vespene);
+  }
+
   // Выбор объекта под точкой (ЛКМ-клик / тап)
   function selectAt(clientX, clientY) {
     const picked = pickUnit(clientX, clientY);
-    if (picked && picked.isPlayer) {
+    if (picked && isMine(picked)) {
       const now = performance.now();
       const isDouble = picked === lastClickUnit && now - lastClickTime < DOUBLE_CLICK_MS;
       if (isDouble) {
         const sameType = units.filter(u =>
-          u && u.mesh && u.hp > 0 && !u.inBunker && u.isPlayer &&
+          u && u.mesh && u.hp > 0 && !u.inBunker && isMine(u) &&
           u.type === picked.type && isUnitOnScreen(u)
         );
         selectUnits(sameType);
@@ -537,6 +547,7 @@ export function setupControls(camera, renderer, scene) {
     if (selection.building && isOwn(selection.building) && hit) {
       const b = selection.building;
       if (['cc', 'barracks', 'factory', 'starport'].includes(b.type)) {
+        issue({ c: 'rally', building: b.id, x: hit.x, z: hit.z });
         b.rallyPoint = { x: hit.x, z: hit.z };
         showRallyFlag(hit.x, hit.z);
         showHintLocal('Точка сбора установлена');
@@ -551,41 +562,32 @@ export function setupControls(camera, renderer, scene) {
     // Своё здание: рефайнери — газ, бункер — гарнизон, иначе — идти к нему
     const bld = pickBuilding(clientX, clientY);
     if (bld && isOwn(bld)) {
-      if (bld.type === 'refinery' && selection.units.some(u => u.isWorker)) {
-        for (const u of selection.units) if (u.isWorker && !u.construction && !u.repairJob) orderMineGas(u, bld);
+      const workers = selection.units.filter((u) => u.isWorker);
+      if (bld.type === 'refinery' && workers.length) {
+        issue({ c: 'gas', ids: ids(workers), refinery: bld.id });
         return;
       }
       if (bld.type === 'bunker') {
         const fighters = selection.units.filter(u => !u.isWorker && !u.isHealer && !u.inBunker && !u.goingToBunker);
-        let count = 0;
-        for (const u of fighters) if (orderGarrison(scene, bld, u)) count++;
-        if (count > 0) { showHintLocal(`Идут в бункер: ${count}`); return; }
+        if (fighters.length) {
+          issue({ c: 'garrison', ids: ids(fighters), bunker: bld.id });
+          showHintLocal(`Идут в бункер: ${Math.min(fighters.length, 4)}`);
+          return;
+        }
       }
       const pos = bld.mesh.position;
-      for (const u of selection.units) {
-        if (u.inBunker || u.construction || u.repairJob) continue;
-        if (u.isWorker) orderMove(u, pos.x, pos.z);
-        else {
-          u.attackTarget = null;
-          u.goingToBunker = null;
-          u.target = { x: pos.x, y: 0, z: pos.z };
-          u.autoAttackDisabled = true;
-        }
-        drawPathLine(u.mesh.position, pos, 0x66ff66);
-      }
+      issue({ c: 'move', ids: ids(selection.units), x: pos.x, z: pos.z });
+      for (const u of selection.units) drawPathLine(u.mesh.position, pos, 0x66ff66);
       return;
     }
 
     // Враг — атаковать
-    const enemy = pickUnit(clientX, clientY, u => !u.isPlayer) || (bld && !isOwn(bld) ? bld : null);
+    const enemy = pickUnit(clientX, clientY, u => !isFriendly(u)) || (bld && !isFriendly(bld) ? bld : null);
     if (enemy) {
-      for (const u of selection.units) {
-        if (u.isWorker || u.inBunker || u.isHealer) continue;
-        u.attackTarget = enemy;
-        u.target = null;
-        u.goingToBunker = null;
-        u.autoAttackDisabled = false;
-        playSound('voice_' + u.type + '_order');
+      const fighters = selection.units.filter((u) => !u.isWorker && !u.inBunker && !u.isHealer);
+      if (fighters.length) {
+        issue({ c: 'attack', ids: ids(fighters), target: enemy.id });
+        playSound('voice_' + fighters[0].type + '_order');
       }
       return;
     }
@@ -598,20 +600,18 @@ export function setupControls(camera, renderer, scene) {
       if (Math.hypot(mp.x - hit.x, mp.z - hit.z) < 2.5) { mineralHit = mp; break; }
     }
 
-    for (const u of selection.units) {
-      if (u.inBunker || u.construction || u.repairJob) continue;
-      if (u.isWorker) {
-        if (mineralHit) orderMineMinerals(u, mineralHit);
-        else orderMove(u, hit.x, hit.z);
-      } else {
-        u.attackTarget = null;
-        u.goingToBunker = null;
-        u.target = { x: hit.x, y: 0, z: hit.z };
-        u.autoAttackDisabled = true;
-      }
-      playSound('voice_' + u.type + '_order');
-      drawPathLine(u.mesh.position, hit, 0x66ff66);
+    const movers = selection.units.filter((u) => !u.inBunker && !u.construction && !u.repairJob);
+    if (!movers.length) return;
+    const workers = movers.filter((u) => u.isWorker);
+    if (mineralHit && workers.length) {
+      issue({ c: 'mine', ids: ids(workers), patch: mineralPatches.indexOf(mineralHit) });
+      const others = movers.filter((u) => !u.isWorker);
+      if (others.length) issue({ c: 'move', ids: ids(others), x: hit.x, z: hit.z });
+    } else {
+      issue({ c: 'move', ids: ids(movers), x: hit.x, z: hit.z });
     }
+    playSound('voice_' + movers[0].type + '_order');
+    for (const u of movers) drawPathLine(u.mesh.position, hit, 0x66ff66);
   }
 
   function boxSelect(x1, y1, x2, y2) {
@@ -619,7 +619,7 @@ export function setupControls(camera, renderer, scene) {
     const picked = [];
     const v = new THREE.Vector3();
     for (const u of units) {
-      if (!u.isPlayer || u.inBunker || u.hp <= 0) continue;
+      if (!isMine(u) || u.inBunker || u.hp <= 0) continue;
       v.copy(u.mesh.position).project(camera);
       const sx = rect.left + (v.x * 0.5 + 0.5) * rect.width;
       const sy = rect.top + (-v.y * 0.5 + 0.5) * rect.height;
@@ -675,14 +675,11 @@ export function setupControls(camera, renderer, scene) {
       for (const u of selection.units) {
         if (u.isWorker && u.construction) {
           playExplosion();
-          cancelConstruction(scene, u.construction);
+          issue({ c: 'cancelConstruction', worker: u.id });
           handled = true;
         }
         if (u.repairJob) {
-          const job = u.repairJob;
-          cancelRepair(job);
-          const idx = repairs.indexOf(job);
-          if (idx >= 0) repairs.splice(idx, 1);
+          issue({ c: 'cancelRepair', worker: u.id });
           handled = true;
         }
       }
@@ -695,8 +692,8 @@ export function setupControls(camera, renderer, scene) {
       return;
     }
     if (k === 'q' || k === 'й') { if (selection.units.length > 0) enterAttackMode(); }
-    if (k === 't' || k === 'е') { for (const u of selection.units) if (u.canSiege) toggleSiege(u); }
-    if (k === 'v' || k === 'м') { for (const u of selection.units) if (u.canTransform) toggleTransform(u); }
+    if (k === 't' || k === 'е') siegeSelected();
+    if (k === 'v' || k === 'м') transformSelected();
     if ((k === 's' || k === 'ы') && selection.units.length > 0) stopSelected();
     if (k === 'x' || k === 'ч') enterSnipeMode();
   });
@@ -794,7 +791,7 @@ export function setupControls(camera, renderer, scene) {
   function handleTap(x, y) {
     if (handleModeClick(x, y)) return;
 
-    const ownUnit = pickUnit(x, y, u => u.isPlayer);
+    const ownUnit = pickUnit(x, y, u => isMine(u));
     if (ownUnit) { selectAt(x, y); return; }
 
     if (selection.units.length > 0) {
@@ -936,14 +933,14 @@ export function setupControls(camera, renderer, scene) {
 
   bindTool('tb-army', () => {
     cancelAllModes();
-    const army = units.filter(u => u.isPlayer && !u.isWorker && !u.inBunker && u.hp > 0);
+    const army = units.filter(u => isMine(u) && !u.isWorker && !u.inBunker && u.hp > 0);
     if (army.length) { selectUnits(army); removeRallyFlag(); }
     else showHintLocal('Нет боевых юнитов');
   });
 
   bindTool('tb-workers', () => {
     cancelAllModes();
-    const workers = units.filter(u => u.isPlayer && u.isWorker && u.hp > 0);
+    const workers = units.filter(u => isMine(u) && u.isWorker && u.hp > 0);
     const idle = workers.filter(u => u.state === 'idle' && !u.moveTarget && !u.construction && !u.repairJob);
     const list = idle.length ? idle : workers;
     if (list.length) {

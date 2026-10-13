@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { progress } from './progress.js';
 import { SKINS } from './skins.js';
+import { isMine } from './session.js';
 
 export function getActiveSkin() {
   const id = progress.activeSkin || 'default';
@@ -64,7 +65,7 @@ export function applySkinToMesh(mesh, owner = 'player', skin = null) {
 export function applySkinToAllPlayerUnits(scene, units, buildings, commandCenters) {
   for (const u of units) {
     if (!u || !u.mesh) continue;
-    if (!u.isPlayer) continue;
+    if (!isMine(u)) continue;
 
     const unitSkin = getUnitSkin(u.type);
     const key = u.type + ':' + (unitSkin.name || 'default');
@@ -75,7 +76,7 @@ export function applySkinToAllPlayerUnits(scene, units, buildings, commandCenter
 
   for (const b of buildings) {
     if (!b || !b.mesh) continue;
-    if ((b.owner || 'player') !== 'player') continue;
+    if (!isMine(b)) continue;
 
     const bSkin = getBuildingSkin(b.type);
     const key = b.type + ':' + (bSkin.name || 'default');
@@ -86,7 +87,7 @@ export function applySkinToAllPlayerUnits(scene, units, buildings, commandCenter
   }
   for (const cc2 of commandCenters) {
     if (!cc2 || !cc2.mesh) continue;
-    if ((cc2.owner || 'player') !== 'player') continue;
+    if (!isMine(cc2)) continue;
 
     const bSkin = getBuildingSkin(cc2.type || 'cc');
     const key = 'cc:' + (bSkin.name || 'default');

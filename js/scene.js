@@ -3,6 +3,8 @@ import { getModel, hasModel, loadAllModels } from './models.js';
 import { BIOMES } from './maps.js';
 import { mineralPatches, geysers } from './world.js';
 import { IS_TOUCH } from './ui.js';
+import { tintFor } from './session.js';
+import { assignId } from './ids.js';
 
 export { mineralPatches, geysers };
 
@@ -85,7 +87,9 @@ function makeProgressBar() {
   return sprite;
 }
 
-export function createCommandCenter(scene, x, z, color = 0x5577aa, owner = 'player') {
+export function createCommandCenter(scene, x, z, color = 0x5577aa, owner = 'player', ctrl = null) {
+  if (!ctrl) ctrl = owner === 'bot' ? 'ai' : 'p1';
+  const tint = tintFor(owner, ctrl);
   const group = new THREE.Group();
   group.position.set(x, 0, z);
   group.rotation.y = Math.PI;
@@ -100,6 +104,14 @@ export function createCommandCenter(scene, x, z, color = 0x5577aa, owner = 'play
 
   if (hasModel('cc')) {
     const model = getModel('cc', 3.5);
+    if (tint !== null) {
+      model.traverse((child) => {
+        if (child.isMesh && child.material) {
+          child.material = child.material.clone();
+          child.material.color.lerp(new THREE.Color(tint), 0.4);
+        }
+      });
+    }
     group.add(model);
   } else {
     const mesh = new THREE.Mesh(
@@ -119,8 +131,11 @@ export function createCommandCenter(scene, x, z, color = 0x5577aa, owner = 'play
     hp: 300, maxHp: 300,
     hasReactor: false, hasTechlab: false, addonTaken: false,
     attackCooldown: 0,
-    sight: 11
+    sight: 11,
+    rallyPoint: null,
+    ctrl
   };
+  assignId(b);
 
   const hpBar = makeBuildingHpBar();
   hpBar.position.y = 2.8;

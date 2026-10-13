@@ -7,6 +7,7 @@ import { playClick } from './audio.js';
 import { gameplayStart, gameplayStop } from './yandex.js';
 import { showConfirm } from './ui.js';
 import { flushCloudSave } from './progress.js';
+import { isNetGame } from './session.js';
 
 let paused = false;
 let gameActive = false;
@@ -14,7 +15,9 @@ let settingsFromPause = false;
 let initialized = false;
 const systemReasons = new Set();
 
+// В игре по сети меню паузы не останавливает игру — иначе замрёт и друг
 export function isPaused() {
+  if (isNetGame()) return false;
   return paused || systemReasons.size > 0;
 }
 
@@ -111,7 +114,10 @@ export function initPause() {
 
   document.getElementById('pause-menu')?.addEventListener('click', async () => {
     playClick();
-    const ok = await showConfirm('Выйти в главное меню? Прогресс партии будет потерян.', { okText: 'Выйти' });
+    const text = isNetGame()
+      ? 'Выйти в главное меню? Игра по сети закончится.'
+      : 'Выйти в главное меню? Прогресс партии будет потерян.';
+    const ok = await showConfirm(text, { okText: 'Выйти' });
     if (!ok) return;
     await Promise.race([flushCloudSave(), new Promise((r) => setTimeout(r, 1500))]);
     location.reload();

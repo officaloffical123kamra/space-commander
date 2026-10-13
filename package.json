@@ -5,9 +5,11 @@
   "description": "RTS для Яндекс Игр (Three.js)",
   "scripts": {
     "serve": "node tools/serve.mjs",
+    "dev": "node tools/serve.mjs",
     "build": "node tools/build.mjs"
   },
   "devDependencies": {
-    "ffmpeg-static": "^5.2.0"
+    "ffmpeg-static": "^5.2.0",
+    "ws": "^8.18.0"
   }
 }

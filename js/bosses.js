@@ -4,6 +4,7 @@ import { units, makeHpBar, drawHpBar } from './units.js';
 import { getHeight } from './terrain.js';
 import { hasModel, getModel } from './models.js';
 import { playSound } from './audio.js';
+import { assignId } from './ids.js';
 
 export const BOSS_PRESETS = {
   titan: {
@@ -112,6 +113,7 @@ export function spawnBoss(scene, x, z, bossType = 'titan', owner = 'bot', option
     type: bossType,
     name: options.name || preset.name,
     owner,
+    ctrl: owner === 'player' ? 'p1' : 'ai',
     target: null,
     attackTarget: null,
     hp,
@@ -157,6 +159,7 @@ export function spawnBoss(scene, x, z, bossType = 'titan', owner = 'bot', option
   };
 
   drawHpBar(boss);
+  assignId(boss);
   units.push(boss);
   return boss;
 }

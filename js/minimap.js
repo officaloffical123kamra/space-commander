@@ -2,6 +2,13 @@ import { units, isHiddenFrom } from './units.js';
 import { buildings, commandCenters } from './build.js';
 import { isVisible, getFogCanvas } from './fog.js';
 import { settings } from './menu.js';
+import { session, isMine, isFriendly } from './session.js';
+
+// Цвета глазами локального игрока: свои / союзник / враг
+function colorOf(o, mine, ally, enemy) {
+  if (isMine(o)) return mine;
+  return isFriendly(o) ? ally : enemy;
+}
 
 const MAP_SIZE = 60;
 const MINIMAP_PX = 200;
@@ -39,21 +46,17 @@ export function drawMinimap(camera) {
 
   for (const b of buildings) {
     if (!b.mesh || b.hp <= 0) continue;
-    const isPlayerB = (b.owner || 'player') === 'player';
     const pos = b.mesh.position;
-    if (!isPlayerB && !seen(pos.x, pos.z)) continue;
-    ctx.fillStyle = isPlayerB
-      ? (b.type === 'refinery' ? '#22aa55' : '#5577aa')
-      : '#aa4455';
+    if (!isFriendly(b) && !seen(pos.x, pos.z)) continue;
+    ctx.fillStyle = b.type === 'refinery' && isMine(b) ? '#22aa55' : colorOf(b, '#5577aa', '#3a9a66', '#aa4455');
     const size = 6;
     ctx.fillRect(toPx(pos.x) - size / 2, toPx(pos.z) - size / 2, size, size);
   }
   for (const cc of commandCenters) {
     if (!cc.mesh || cc.hp <= 0) continue;
-    const isPlayerCC = (cc.owner || 'player') === 'player';
     const pos = cc.mesh.position;
-    if (!isPlayerCC && !seen(pos.x, pos.z)) continue;
-    ctx.fillStyle = isPlayerCC ? '#5577aa' : '#aa4455';
+    if (!isFriendly(cc) && !seen(pos.x, pos.z)) continue;
+    ctx.fillStyle = colorOf(cc, '#5577aa', '#3a9a66', '#aa4455');
     const size = 8;
     ctx.fillRect(toPx(pos.x) - size / 2, toPx(pos.z) - size / 2, size, size);
   }
@@ -61,8 +64,8 @@ export function drawMinimap(camera) {
   for (const u of units) {
     if (!u || !u.mesh || u.inBunker) continue;
     const pos = u.mesh.position;
-    if (!u.isPlayer && (!seen(pos.x, pos.z) || isHiddenFrom(u, 'player'))) continue;
-    ctx.fillStyle = u.isPlayer ? '#44aaff' : '#ff4444';
+    if (!isFriendly(u) && (!seen(pos.x, pos.z) || isHiddenFrom(u, session.localTeam))) continue;
+    ctx.fillStyle = colorOf(u, '#44aaff', '#44dd88', '#ff4444');
     const size = u.isBoss ? 6 : 3;
     ctx.fillRect(toPx(pos.x) - size / 2, toPx(pos.z) - size / 2, size, size);
   }

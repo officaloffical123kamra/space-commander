@@ -6,7 +6,9 @@ import { openShop } from './shop.js';
 import { openAchievements } from './achievements_screen.js';
 import { loadAllModels } from './models.js';
 import { showAlert, showConfirm } from './ui.js';
-import { showRewardedAd } from './yandex.js';
+import { showRewardedAd, isYandexReady } from './yandex.js';
+import { session } from './session.js';
+import { initLobby, openLobby } from './lobby.js';
 import { isSettingsFromPause, returnFromSettings } from './pause.js';
 import { storageGet, storageSet, sessionGet, sessionSet, sessionRemove } from './storage.js';
 import {
@@ -73,6 +75,7 @@ export function getSelectedDifficulty() { return selectedDifficulty; }
 
 export async function requestRestart() {
   sessionSet(AUTOSTART_KEY, JSON.stringify({
+    mode: session.mode,
     mapId: selectedMapId,
     missionId: window._campaignMissionId || null
   }));
@@ -93,10 +96,15 @@ export function tryAutostart() {
   sessionRemove(AUTOSTART_KEY);
   try {
     const data = JSON.parse(raw);
-    if (data.missionId && getMissionById(data.missionId)) {
+    if (data.mode === 'survival') {
+      session.mode = 'survival';
+      window._campaignMissionId = null;
+    } else if (data.missionId && getMissionById(data.missionId)) {
+      session.mode = 'campaign';
       window._campaignMissionId = data.missionId;
       selectedMapId = getMissionById(data.missionId).mapId;
     } else {
+      session.mode = 'skirmish';
       window._campaignMissionId = null;
       if (MAPS[data.mapId]) selectedMapId = data.mapId;
     }
@@ -112,6 +120,11 @@ function launchGame() {
   stopMenu3D();
   hideAllMenus();
   if (onStartGame) onStartGame();
+}
+
+// Запуск из лобби (игра по сети) — те же шаги, что и у обычного старта
+function launchFromLobby() {
+  launchGame();
 }
 
 export function initMenu(startGameCallback) {
@@ -149,6 +162,21 @@ export function initMenu(startGameCallback) {
   };
   window.addEventListener('pointerdown', startMenuMusic, { once: true });
   window.addEventListener('keydown', startMenuMusic, { once: true });
+
+  initLobby({ startGame: launchFromLobby, showScreen });
+
+  document.getElementById('menu-survival')?.addEventListener('click', () => {
+    playClick();
+    session.mode = 'survival';
+    window._campaignMissionId = null;
+    launchGame();
+  });
+  // На Яндекс Играх своего сервера нет — игру по сети не показываем
+  const netBtn = document.getElementById('menu-network');
+  if (netBtn) {
+    if (isYandexReady()) netBtn.classList.add('hidden');
+    netBtn.addEventListener('click', () => { playClick(); openLobby(); });
+  }
 
   document.getElementById('menu-play')?.addEventListener('click', () => {
     playClick(); showScreen('campaign-screen'); renderCampaignList();
@@ -303,6 +331,7 @@ function renderMapList() {
       playClick();
       selectedMapId = id;
       saveSettings();
+      session.mode = 'skirmish';
       window._campaignMissionId = null;
       launchGame();
     });
@@ -387,6 +416,7 @@ function renderCampaignList() {
         window._campaignMissionId = id;
         selectedMapId = m.mapId;
         saveSettings();
+        session.mode = 'campaign';
         launchGame();
       });
     }
@@ -441,12 +471,12 @@ function drawMapPreview(canvas, map) {
   ctx.beginPath(); ctx.arc(toX(map.botMins.x), toY(map.botMins.z), 4, 0, Math.PI * 2); ctx.fill();
 }
 
-function showScreen(id) {
+export function showScreen(id) {
   document.querySelectorAll('.menu-screen').forEach(s => s.classList.add('hidden'));
   document.getElementById(id)?.classList.remove('hidden');
 }
 
-function hideAllMenus() {
+export function hideAllMenus() {
   document.querySelectorAll('.menu-screen').forEach(s => s.classList.add('hidden'));
   const statsEl = document.getElementById('menu-stats');
   if (statsEl) statsEl.remove();

@@ -1509,3 +1509,12 @@ body.touch .desktop-only { display: none; }
   .menu-buttons { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); justify-items: center; }
   .menu-btn { width: 100%; }
 }
+
+/* === Игра по сети === */
+.net-text { color: #e0c890; font-size: 14px; line-height: 1.6; margin: 10px 0 18px; }
+.net-error { color: #ff9a80; font-size: 13px; margin: 0 0 14px; }
+.net-modes { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin-bottom: 14px; text-align: left; }
+.net-steps { text-align: left; display: inline-block; color: #c8b888; font-size: 13px; line-height: 1.9; margin-bottom: 20px;
+  background: rgba(20,16,10,0.85); border: 1px solid rgba(200,152,72,0.3); padding: 14px 20px; }
+.net-address { color: #ffcc44; font-size: 16px; font-weight: bold; padding-left: 16px; user-select: text; -webkit-user-select: text; }
+#net-content .menu-buttons { margin-top: 10px; }

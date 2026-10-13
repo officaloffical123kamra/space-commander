@@ -1,6 +1,8 @@
 // js/build.js
 import * as THREE from 'three';
-import { state, updateHud, createWorker, hasArmyRoom, addArmyMax, updateArmyHud } from './economy.js';
+import { state, updateHud, createWorker, hasArmyRoom, addArmyMax, updateArmyHud, getEco, countArmy } from './economy.js';
+import { session, ctrlOf, teamOfCtrl, tintFor, routeToRemote, withActor } from './session.js';
+import { assignId } from './ids.js';
 import { makeUnit, UNIT_PRESETS, detectors, drawHpBar, dealDamage, isHiddenFrom, spawnTracer } from './units.js';
 import { playReady, playError, playBuildComplete, playSound } from './audio.js';
 import { getModel, hasModel } from './models.js';
@@ -10,7 +12,7 @@ import {
   buildings, commandCenters, constructions, repairs,
   mineralPatches, geysers, findNearestMineralPatch, findNearestGeyser
 } from './world.js';
-import { upgrades, getWeaponBonus, getArmorReduction } from './upgrades.js';
+import { upgrades, getWeaponBonus, getArmorReduction, getUpgrades } from './upgrades.js';
 import { trackBuildingBuilt } from './achievements.js';
 
 export { buildings, commandCenters, constructions, repairs };
@@ -50,23 +52,23 @@ export const REQUIREMENTS = {
   starport:    ['factory']
 };
 
-export function canBuildType(type) {
+export function canBuildType(type, ctrl = session.localCtrl) {
   const reqs = REQUIREMENTS[type];
   if (!reqs || reqs.length === 0) return true;
   for (const req of reqs) {
-    const inBuildings = buildings.some(b => b.type === req && (b.owner === 'player' || b.owner === undefined));
-    const inConstructions = constructions.some(c => c.type === req);
+    const inBuildings = buildings.some(b => b.type === req && ctrlOf(b) === ctrl);
+    const inConstructions = constructions.some(c => c.type === req && c.ctrl === ctrl);
     if (!inBuildings && !inConstructions) return false;
   }
   return true;
 }
 
-export function getMissingRequirement(type) {
+export function getMissingRequirement(type, ctrl = session.localCtrl) {
   const reqs = REQUIREMENTS[type];
   if (!reqs || reqs.length === 0) return null;
   for (const req of reqs) {
-    const inBuildings = buildings.some(b => b.type === req && (b.owner === 'player' || b.owner === undefined));
-    const inConstructions = constructions.some(c => c.type === req);
+    const inBuildings = buildings.some(b => b.type === req && ctrlOf(b) === ctrl);
+    const inConstructions = constructions.some(c => c.type === req && c.ctrl === ctrl);
     if (!inBuildings && !inConstructions) return BUILDING_NAMES[req] || req;
   }
   return null;
@@ -239,7 +241,7 @@ function attachProgressBar(b, height) {
   b.progressBar = pBar;
 }
 
-function makeBuildingBase(type, x, z, owner, mesh) {
+function makeBuildingBase(type, x, z, owner, mesh, ctrl = null) {
   let sight = 10;
   if (type === 'sensor') sight = 22;      // ← АНТЕННА: было 12, стало 22
   if (type === 'cc') sight = 11;
@@ -254,18 +256,21 @@ function makeBuildingBase(type, x, z, owner, mesh) {
     attackCooldown: 0,
     sight: sight,
     detectorRadius: type === 'sensor' ? 22 : 0,
-    rallyPoint: null
+    rallyPoint: null,
+    ctrl: ctrl || (owner === 'bot' ? 'ai' : 'p1')
   };
+  assignId(b);
   const h = buildingHeight(type);
   attachBuildingHpBar(b, h);
   attachProgressBar(b, h);
   return b;
 }
 
-function makeBuildingMesh(scene, type, x, z, owner) {
+export function makeBuildingMesh(scene, type, x, z, owner, ctrl = null) {
   const group = new THREE.Group();
   group.rotation.y = Math.PI;
   const col = (c1, c2) => owner === 'bot' ? c2 : c1;
+  const tint = tintFor(owner, ctrl || (owner === 'bot' ? 'ai' : 'p1'));
 
   if (hasModel(type)) {
     const targetSize = {
@@ -276,11 +281,11 @@ function makeBuildingMesh(scene, type, x, z, owner) {
 
     const model = getModel(type, targetSize);
 
-    if (owner === 'bot') {
+    if (tint !== null) {
       model.traverse((child) => {
         if (child.isMesh && child.material) {
           child.material = child.material.clone();
-          child.material.color.lerp(new THREE.Color(0xaa3333), 0.4);
+          child.material.color.lerp(new THREE.Color(tint), 0.4);
         }
       });
     }
@@ -345,45 +350,44 @@ function makeBuildingMesh(scene, type, x, z, owner) {
   return group;
 }
 
-export function createBarracks(scene, x, z, owner = 'player') {
-  const mesh = makeBuildingMesh(scene, 'barracks', x, z, owner);
-  const b = makeBuildingBase('barracks', x, z, owner, mesh);
+export function createBarracks(scene, x, z, owner = 'player', ctrl = null) {
+  const mesh = makeBuildingMesh(scene, 'barracks', x, z, owner, ctrl);
+  const b = makeBuildingBase('barracks', x, z, owner, mesh, ctrl);
   buildings.push(b); return b;
 }
-export function createFactory(scene, x, z, owner = 'player') {
-  const mesh = makeBuildingMesh(scene, 'factory', x, z, owner);
-  const b = makeBuildingBase('factory', x, z, owner, mesh);
+export function createFactory(scene, x, z, owner = 'player', ctrl = null) {
+  const mesh = makeBuildingMesh(scene, 'factory', x, z, owner, ctrl);
+  const b = makeBuildingBase('factory', x, z, owner, mesh, ctrl);
   buildings.push(b); return b;
 }
-export function createStarport(scene, x, z, owner = 'player') {
-  const mesh = makeBuildingMesh(scene, 'starport', x, z, owner);
-  const b = makeBuildingBase('starport', x, z, owner, mesh);
+export function createStarport(scene, x, z, owner = 'player', ctrl = null) {
+  const mesh = makeBuildingMesh(scene, 'starport', x, z, owner, ctrl);
+  const b = makeBuildingBase('starport', x, z, owner, mesh, ctrl);
   buildings.push(b); return b;
 }
-export function createRefinery(scene, geyser, owner = 'player') {
-  const mesh = makeBuildingMesh(scene, 'refinery', geyser.x, geyser.z, owner);
-  const b = makeBuildingBase('refinery', geyser.x, geyser.z, owner, mesh);
+export function createRefinery(scene, geyser, owner = 'player', ctrl = null) {
+  const mesh = makeBuildingMesh(scene, 'refinery', geyser.x, geyser.z, owner, ctrl);
+  const b = makeBuildingBase('refinery', geyser.x, geyser.z, owner, mesh, ctrl);
   b.geyser = geyser; b.workers = [];
   buildings.push(b); return b;
 }
-export function createStorage(scene, x, z, owner = 'player') {
-  const mesh = makeBuildingMesh(scene, 'storage', x, z, owner);
-  const b = makeBuildingBase('storage', x, z, owner, mesh);
+export function createStorage(scene, x, z, owner = 'player', ctrl = null) {
+  const mesh = makeBuildingMesh(scene, 'storage', x, z, owner, ctrl);
+  const b = makeBuildingBase('storage', x, z, owner, mesh, ctrl);
   buildings.push(b);
-  if (owner === 'player') addArmyMax(8);
   return b;
 }
-export function createBunker(scene, x, z, owner = 'player') {
-  const mesh = makeBuildingMesh(scene, 'bunker', x, z, owner);
-  const b = makeBuildingBase('bunker', x, z, owner, mesh);
+export function createBunker(scene, x, z, owner = 'player', ctrl = null) {
+  const mesh = makeBuildingMesh(scene, 'bunker', x, z, owner, ctrl);
+  const b = makeBuildingBase('bunker', x, z, owner, mesh, ctrl);
   b.garrison = [];
   b.maxGarrison = 4;
   b.attackRange = 6.0;
   buildings.push(b); return b;
 }
-export function createSensor(scene, x, z, owner = 'player') {
-  const mesh = makeBuildingMesh(scene, 'sensor', x, z, owner);
-  const b = makeBuildingBase('sensor', x, z, owner, mesh);
+export function createSensor(scene, x, z, owner = 'player', ctrl = null) {
+  const mesh = makeBuildingMesh(scene, 'sensor', x, z, owner, ctrl);
+  const b = makeBuildingBase('sensor', x, z, owner, mesh, ctrl);
   buildings.push(b);
   // Регистрируем как детектор невидимок (для своего владельца)
   detectors.push({ x, z, range: 22, source: b, owner });
@@ -391,27 +395,27 @@ export function createSensor(scene, x, z, owner = 'player') {
   b.radarRing = createSensorRadar(mesh);
   return b;
 }
-export function createTurret(scene, x, z, owner = 'player') {
-  const mesh = makeBuildingMesh(scene, 'turret', x, z, owner);
-  const b = makeBuildingBase('turret', x, z, owner, mesh);
+export function createTurret(scene, x, z, owner = 'player', ctrl = null) {
+  const mesh = makeBuildingMesh(scene, 'turret', x, z, owner, ctrl);
+  const b = makeBuildingBase('turret', x, z, owner, mesh, ctrl);
   b.attack = 15; b.attackRange = 5.0; b.attackSpeed = 1.0;
   buildings.push(b);
   detectors.push({ x, z, range: 6, source: b, owner });
   return b;
 }
-export function createEngineering(scene, x, z, owner = 'player') {
-  const mesh = makeBuildingMesh(scene, 'engineering', x, z, owner);
-  const b = makeBuildingBase('engineering', x, z, owner, mesh);
+export function createEngineering(scene, x, z, owner = 'player', ctrl = null) {
+  const mesh = makeBuildingMesh(scene, 'engineering', x, z, owner, ctrl);
+  const b = makeBuildingBase('engineering', x, z, owner, mesh, ctrl);
   buildings.push(b); return b;
 }
-export function createArmory(scene, x, z, owner = 'player') {
-  const mesh = makeBuildingMesh(scene, 'armory', x, z, owner);
-  const b = makeBuildingBase('armory', x, z, owner, mesh);
+export function createArmory(scene, x, z, owner = 'player', ctrl = null) {
+  const mesh = makeBuildingMesh(scene, 'armory', x, z, owner, ctrl);
+  const b = makeBuildingBase('armory', x, z, owner, mesh, ctrl);
   buildings.push(b); return b;
 }
-export function createCC(scene, x, z, owner = 'player') {
-  const mesh = makeBuildingMesh(scene, 'cc', x, z, owner);
-  const b = makeBuildingBase('cc', x, z, owner, mesh);
+export function createCC(scene, x, z, owner = 'player', ctrl = null) {
+  const mesh = makeBuildingMesh(scene, 'cc', x, z, owner, ctrl);
+  const b = makeBuildingBase('cc', x, z, owner, mesh, ctrl);
   // Привязываем ближайшие ресурсы. Раньше рабочие нового КЦ
   // «добывали» бесконечные минералы из пустой точки.
   b.minerals = findNearestMineralPatch(x, z, 12);
@@ -604,28 +608,31 @@ function ejectGarrison(bunker) {
 export function startConstruction(scene, type, x, z, scv) {
   const c = COSTS[type];
   if (!c) return { ok: false };
+  const ctrl = ctrlOf(scv);
+  const eco = getEco(ctrl);
+  if (!eco) return { ok: false };
 
-  if (!canBuildType(type)) {
-    const missing = getMissingRequirement(type);
+  if (!canBuildType(type, ctrl)) {
+    const missing = getMissingRequirement(type, ctrl);
     showHint(`Требуется: ${missing}`);
-    playError();
+    err();
     return { ok: false };
   }
 
   if (!canPlaceBuilding(scene, type, x, z)) {
     showHint('Здесь нельзя строить');
-    playError();
+    err();
     return { ok: false };
   }
 
-  if (state.minerals < c.minerals || state.vespene < c.vespene) {
-    showHint('Мало ресурсов'); playError(); return { ok: false };
+  if (eco.minerals < c.minerals || eco.vespene < c.vespene) {
+    showHint('Мало ресурсов'); err(); return { ok: false };
   }
-  state.minerals -= c.minerals;
-  state.vespene  -= c.vespene;
+  eco.minerals -= c.minerals;
+  eco.vespene  -= c.vespene;
   updateHud();
 
-  const mesh = makeBuildingMesh(scene, type, x, z, 'player');
+  const mesh = makeBuildingMesh(scene, type, x, z, teamOfCtrl(ctrl), ctrl);
   mesh.traverse((child) => {
     if (child.isMesh && child.material) {
       child.material.transparent = true;
@@ -639,7 +646,7 @@ export function startConstruction(scene, type, x, z, scv) {
   mesh.add(pBar);
 
   const construction = {
-    type, x, z, mesh, scv,
+    type, x, z, mesh, scv, ctrl,
     timeLeft: BUILD_TIMES[type] || 6,
     totalTime: BUILD_TIMES[type] || 6,
     geyser: null,
@@ -648,6 +655,7 @@ export function startConstruction(scene, type, x, z, scv) {
   };
   if (type === 'refinery') construction.geyser = { x, z };
 
+  assignId(construction);
   constructions.push(construction);
 
   if (scv && scv.isWorker) {
@@ -670,8 +678,9 @@ export function cancelConstruction(scene, construction) {
   if (cost) {
     const refundMinerals = Math.floor(cost.minerals * 0.75);
     const refundVespene  = Math.floor(cost.vespene * 0.75);
-    state.minerals += refundMinerals;
-    state.vespene  += refundVespene;
+    const eco = getEco(construction.ctrl) || state;
+    eco.minerals += refundMinerals;
+    eco.vespene  += refundVespene;
     updateHud();
     showHint(`Отменено. Возврат: ${refundMinerals}◆ ${refundVespene}⬢`);
   }
@@ -706,7 +715,7 @@ export function updateConstructions(scene, dt) {
     if (!scv.isWorker) {
       if (c.mesh) { scene.remove(c.mesh); }
       constructions.splice(i, 1);
-      showHint('Стройка отменена');
+      withActor(c.ctrl, () => showHint('Стройка отменена'));
       continue;
     }
 
@@ -755,17 +764,10 @@ export function updateConstructions(scene, dt) {
     if (c.timeLeft <= 0) {
       if (c.mesh) { scene.remove(c.mesh); }
 
-      if (c.type === 'barracks') createBarracks(scene, c.x, c.z, 'player');
-      else if (c.type === 'factory') createFactory(scene, c.x, c.z, 'player');
-      else if (c.type === 'starport') createStarport(scene, c.x, c.z, 'player');
-      else if (c.type === 'storage') createStorage(scene, c.x, c.z, 'player');
-      else if (c.type === 'refinery') createRefinery(scene, c.geyser, 'player');
-      else if (c.type === 'bunker') createBunker(scene, c.x, c.z, 'player');
-      else if (c.type === 'sensor') createSensor(scene, c.x, c.z, 'player');
-      else if (c.type === 'turret') createTurret(scene, c.x, c.z, 'player');
-      else if (c.type === 'engineering') createEngineering(scene, c.x, c.z, 'player');
-      else if (c.type === 'armory') createArmory(scene, c.x, c.z, 'player');
-      else if (c.type === 'cc') createCC(scene, c.x, c.z, 'player');
+      const team = teamOfCtrl(c.ctrl);
+      if (c.type === 'refinery') createRefinery(scene, c.geyser, team, c.ctrl);
+      else if (BUILDING_CREATORS[c.type]) BUILDING_CREATORS[c.type](scene, c.x, c.z, team, c.ctrl);
+      if (c.type === 'storage') addArmyMax(8, c.ctrl);
 
       if (scv) {
         scv.construction = null;
@@ -774,10 +776,14 @@ export function updateConstructions(scene, dt) {
       }
 
       constructions.splice(i, 1);
-      trackBuildingBuilt(c.type);
-      showHint(`Готово: ${BUILDING_NAMES[c.type] || 'постройка'}`);
-      playBuildComplete();
-      playSound('build_complete');
+      if (c.ctrl === session.localCtrl) trackBuildingBuilt(c.type);
+      withActor(c.ctrl, () => {
+        showHint(`Готово: ${BUILDING_NAMES[c.type] || 'постройка'}`);
+        if (!routeToRemote('sound', 'ui_build_complete')) {
+          playBuildComplete();
+          playSound('build_complete');
+        }
+      });
 
       import('./selection.js').then(m => m.renderBuildRow());
     }
@@ -805,13 +811,32 @@ export function attachAddon(scene, building, addonType) {
   return true;
 }
 
+export function buyAddon(scene, building, addonType) {
+  if (!building || building.addonTaken) { showHint('Уже есть пристройка'); return false; }
+  const ctrl = ctrlOf(building);
+  const cost = COSTS[addonType === 'reactor' ? 'reactor' : 'techlab'];
+  if (!canAfford(cost, ctrl)) { showHint('Мало ресурсов'); err(); return false; }
+  if (!attachAddon(scene, building, addonType)) return false;
+  spend(cost, ctrl);
+  showHint(addonType === 'reactor' ? 'Реактор установлен' : 'Тех-лаб установлен');
+  return true;
+}
+
 // ============================================================
 // ПРОИЗВОДСТВО
 // ============================================================
 
-function canAfford(cost) { return state.minerals >= cost.minerals && state.vespene >= cost.vespene; }
-function spend(cost) {
-  state.minerals -= cost.minerals; state.vespene -= cost.vespene; updateHud();
+function canAfford(cost, ctrl = 'p1') {
+  const eco = getEco(ctrl);
+  return !!eco && eco.minerals >= cost.minerals && eco.vespene >= cost.vespene;
+}
+function spend(cost, ctrl = 'p1') {
+  const eco = getEco(ctrl);
+  eco.minerals -= cost.minerals; eco.vespene -= cost.vespene; updateHud();
+}
+function limitText(ctrl) {
+  const eco = getEco(ctrl);
+  return `Лимит: ${countArmy(ctrl)}/${eco ? eco.armyMax : 0}`;
 }
 
 export function availableUnits(building) {
@@ -838,10 +863,11 @@ export function queueUnit(building, unitType) {
   const preset = UNIT_PRESETS[unitType];
   if (!preset) return false;
   const available = availableUnits(building);
+  const ctrl = ctrlOf(building);
   if (!available.includes(unitType)) { showHint('Недоступно в этом здании'); return false; }
-  if (!hasArmyRoom()) { showHint(`Лимит: ${state.armyUsed}/${state.armyMax}`); return false; }
-  if (!canAfford(preset.cost)) { showHint('Мало ресурсов'); playError(); return false; }
-  spend(preset.cost);
+  if (!hasArmyRoom(ctrl)) { showHint(limitText(ctrl)); return false; }
+  if (!canAfford(preset.cost, ctrl)) { showHint('Мало ресурсов'); err(); return false; }
+  spend(preset.cost, ctrl);
   const times = { ghost: 5.0, marauder: 4.0, medic: 3.5, hellion: 3.5, tank: 5.0, thor: 7.0, viking: 4.0, banshee: 5.0, battlecruiser: 9.0 };
   const buildTime = times[unitType] || 3.0;
   building.productionQueue.push({ type: unitType, time: buildTime, totalTime: buildTime });
@@ -850,14 +876,15 @@ export function queueUnit(building, unitType) {
 
 export function queueScv(scene, cc) {
   const c = COSTS.scv;
-  if (!hasArmyRoom()) { showHint(`Лимит: ${state.armyUsed}/${state.armyMax}`); return false; }
-  if (state.minerals < c.minerals) { showHint('Мало минералов'); playError(); return false; }
-  state.minerals -= c.minerals; updateHud();
+  const ctrl = ctrlOf(cc);
+  if (!hasArmyRoom(ctrl)) { showHint(limitText(ctrl)); return false; }
+  if (!canAfford(c, ctrl)) { showHint('Мало минералов'); err(); return false; }
+  spend(c, ctrl);
   cc.productionQueue.push({ type: 'scv', time: 4.0, totalTime: 4.0 });
   return true;
 }
 
-export function buyUpgrade(type) {
+export function buyUpgrade(type, ctrl = session.localCtrl) {
   const cost = COSTS[type];
   if (!cost) return false;
   const key = {
@@ -867,11 +894,16 @@ export function buyUpgrade(type) {
     upgVehArmor:  'vehicleArmor'
   }[type];
   if (!key) return false;
-  if (upgrades[key] >= 5) { showHint('Максимум (5)'); return false; }
-  if (!canAfford(cost)) { showHint('Мало ресурсов'); playError(); return false; }
-  spend(cost);
-  upgrades[key]++;
-  showHint(`${key} → ${upgrades[key]}`);
+  const upg = getUpgrades(teamOfCtrl(ctrl));
+  if (upg[key] >= 5) { showHint('Максимум (5)'); return false; }
+  if (!canAfford(cost, ctrl)) { showHint('Мало ресурсов'); err(); return false; }
+  spend(cost, ctrl);
+  upg[key]++;
+  const UPG_NAMES = {
+    infantryWeapon: 'Оружие пехоты', infantryArmor: 'Броня пехоты',
+    vehicleWeapon: 'Оружие техники', vehicleArmor: 'Броня техники'
+  };
+  showHint(`${UPG_NAMES[key]}: уровень ${upg[key]}`);
   return true;
 }
 
@@ -914,6 +946,7 @@ export function startRepair(scene, building, worker, options = {}) {
     progressBar: null,
     pay: options.pay || null,
     silent,
+    ctrl: ctrlOf(worker),
     prevRefinery: worker.refinery || null,
   };
 
@@ -945,8 +978,10 @@ export function updateRepairs(scene, dt) {
     }
     if (b.hp >= b.maxHp) {
       if (!r.silent) {
-        showHint(`Отремонтировано: ${BUILDING_NAMES[b.type] || b.type}`);
-        playBuildComplete();
+        withActor(r.ctrl, () => {
+          showHint(`Отремонтировано: ${BUILDING_NAMES[b.type] || b.type}`);
+          if (!routeToRemote('sound', 'ui_build_complete')) playBuildComplete();
+        });
       }
       cancelRepair(r);
       repairs.splice(i, 1);
@@ -976,10 +1011,10 @@ export function updateRepairs(scene, dt) {
     const cost = Math.floor(r.costDebt);
 
     if (cost > 0) {
-      const paid = r.pay ? r.pay(cost) : payPlayerMinerals(cost);
+      const paid = r.pay ? r.pay(cost) : payMinerals(cost, r.ctrl);
       if (!paid) {
         r.costDebt -= healAmount * REPAIR_COST_PER_HP;
-        if (!r.healing && !r.silent) showHint('Мало минералов для ремонта');
+        if (!r.healing && !r.silent) withActor(r.ctrl, () => showHint('Мало минералов для ремонта'));
         r.healing = true;
         continue;
       }
@@ -1067,9 +1102,10 @@ export function cancelRepair(repair) {
   }
 }
 
-function payPlayerMinerals(cost) {
-  if (state.minerals < cost) return false;
-  state.minerals -= cost;
+function payMinerals(cost, ctrl = 'p1') {
+  const eco = getEco(ctrl);
+  if (!eco || eco.minerals < cost) return false;
+  eco.minerals -= cost;
   updateHud();
   return true;
 }
@@ -1090,7 +1126,7 @@ export function updateBuildings(scene, dt) {
     if (b.hp <= 0) {
       if (b.mesh) { try { scene.remove(b.mesh); } catch (err) {} }
       if (b.type === 'bunker') ejectGarrison(b);
-      if (b.type === 'storage' && (b.owner || 'player') === 'player') addArmyMax(-8);
+      if (b.type === 'storage') addArmyMax(-8, ctrlOf(b));
       if (b.reactorMesh) scene.remove(b.reactorMesh);
       if (b.techlabMesh) scene.remove(b.techlabMesh);
       buildings.splice(i, 1);
@@ -1116,10 +1152,10 @@ export function updateBuildings(scene, dt) {
         const sx = b.mesh.position.x + offset;
         const sz = b.mesh.position.z;
         const preset = UNIT_PRESETS[job.type];
-        const u = makeUnit(scene, sx, sz, job.type, b.owner !== 'bot', job.type);
-        u.owner = b.owner;
+        const ctrl = ctrlOf(b);
+        const u = makeUnit(scene, sx, sz, job.type, (b.owner || 'player') !== 'bot', job.type, ctrl);
 
-        if (b.owner === 'bot') {
+        if (ctrl === 'ai') {
           u.target = { x: sx + 1, y: 0, z: sz + 1 };
         } else {
           if (b.rallyPoint) {
@@ -1134,13 +1170,15 @@ export function updateBuildings(scene, dt) {
 
         b.productionQueue.splice(i, 1);
         i--;
-        if (b.owner !== 'bot') {
-          showHint(`${preset.name} готов`);
+        if (ctrl !== 'ai') {
           updateArmyHud();
-          playReady();
-          if (b.type === 'barracks') playSound('barracks_ready');
-          else if (b.type === 'factory') playSound('factory_ready');
-          else if (b.type === 'starport') playSound('starport_ready');
+          withActor(ctrl, () => {
+            showHint(`${preset.name} готов`);
+            if (!routeToRemote('sound', 'ui_ready')) {
+              playReady();
+              playSound(b.type + '_ready');
+            }
+          });
         }
       }
     }
@@ -1164,7 +1202,7 @@ export function updateBuildings(scene, dt) {
       b.mesh.rotation.y = Math.atan2(dx, dz);
       b.attackCooldown = b.attackSpeed;
 
-      if (b.owner === 'player') playSound('turret_shoot', 0.6);
+      if (ctrlOf(b) === session.localCtrl) playSound('turret_shoot', 0.6);
 
       const startPos = b.mesh.position.clone();
       startPos.y += 0.6;
@@ -1188,18 +1226,23 @@ export function updateBuildings(scene, dt) {
     if (job.time <= 0) {
       const sx = cc.x + 2;
       if (!cc.minerals || cc.minerals.amount <= 0) cc.minerals = findNearestMineralPatch(cc.x, cc.z, 20);
-      const w = createWorker(scene, cc, cc.minerals, (cc.owner || 'player') === 'player', sx);
-      if (cc.owner !== 'player' && cc.onWorker) cc.onWorker(w);
-      if (cc.owner === 'player' && cc.rallyPoint) {
+      const ctrl = ctrlOf(cc);
+      const w = createWorker(scene, cc, cc.minerals, (cc.owner || 'player') === 'player', sx, ctrl);
+      if (ctrl === 'ai' && cc.onWorker) cc.onWorker(w);
+      if (ctrl !== 'ai' && cc.rallyPoint) {
         w.state = 'idle';
         w.moveTarget = { x: cc.rallyPoint.x, z: cc.rallyPoint.z };
       }
       cc.productionQueue.shift();
-      if (cc.owner === 'player') {
-        showHint('Рабочий готов');
+      if (ctrl !== 'ai') {
         updateArmyHud();
-        playReady();
-        playSound('cc_ready');
+        withActor(ctrl, () => {
+          showHint('Рабочий готов');
+          if (!routeToRemote('sound', 'ui_ready')) {
+            playReady();
+            playSound('cc_ready');
+          }
+        });
       }
     }
   }
@@ -1232,8 +1275,21 @@ export function repairUnit(unit, amount) {
   return true;
 }
 
+const BUILDING_CREATORS = {
+  barracks: createBarracks, factory: createFactory, starport: createStarport,
+  storage: createStorage, bunker: createBunker, sensor: createSensor,
+  turret: createTurret, engineering: createEngineering, armory: createArmory,
+  cc: createCC
+};
+
+// Звук ошибки — тому, чей это приказ
+function err() {
+  if (!routeToRemote('sound', 'ui_error')) playError();
+}
+
 let hintTimer = null;
 export function showHint(text, ms = 2000) {
+  if (routeToRemote('hint', text)) return;
   const el = document.getElementById('hint');
   if (!el) return;
   el.textContent = text;

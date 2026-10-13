@@ -5,6 +5,8 @@ import { getModel, hasModel } from './models.js';
 import { getHeight, isInChasm } from './terrain.js';
 import { buildings as worldBuildings, commandCenters as worldCCs } from './world.js';
 import { getWeaponBonus, getArmorReduction } from './upgrades.js';
+import { tintFor } from './session.js';
+import { assignId, forgetId } from './ids.js';
 
 export const units = [];
 
@@ -166,7 +168,9 @@ export function drawHpBar(obj) {
   } catch (err) {}
 }
 
-export function makeUnit(scene, x, z, typeOrColor, isPlayer = true, presetName = 'marine') {
+export function makeUnit(scene, x, z, typeOrColor, isPlayer = true, presetName = 'marine', ctrl = null) {
+  if (!ctrl) ctrl = isPlayer ? 'p1' : 'ai';
+  const tint = tintFor(isPlayer ? 'player' : 'bot', ctrl);
   let preset;
   if (typeof typeOrColor === 'number') {
     preset = { ...UNIT_PRESETS.marine, color: typeOrColor };
@@ -182,8 +186,8 @@ export function makeUnit(scene, x, z, typeOrColor, isPlayer = true, presetName =
     mesh.traverse((child) => {
       if (child.isMesh && child.material) {
         child.material = child.material.clone();
-        if (!isPlayer) {
-          child.material.color.lerp(new THREE.Color(0xaa3333), 0.4);
+        if (tint !== null && child.material.color) {
+          child.material.color.lerp(new THREE.Color(tint), 0.4);
         }
         // Невидимкам нужна прозрачность, иначе opacity не работает
         if (preset.isInvisible) child.material.transparent = true;
@@ -211,6 +215,7 @@ export function makeUnit(scene, x, z, typeOrColor, isPlayer = true, presetName =
     type: presetName,
     name: preset.name,
     owner: isPlayer ? 'player' : 'bot',
+    ctrl,
     target: null,
     attackTarget: null,
     hp: preset.hp,
@@ -258,6 +263,7 @@ export function makeUnit(scene, x, z, typeOrColor, isPlayer = true, presetName =
   };
 
   drawHpBar(unit);
+  assignId(unit);
   units.push(unit);
   return unit;
 }
@@ -449,6 +455,7 @@ export function killUnit(scene, u) {
 
   const idx = units.indexOf(u);
   if (idx >= 0) units.splice(idx, 1);
+  forgetId(u);
   playDeathAnimation(u, scene);
 }
 
