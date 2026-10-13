@@ -87,6 +87,13 @@ let host = null;
 let hostInfo = null;
 let started = false;
 const guests = new Map(); // слот -> ws
+const names = new Map();  // слот -> ник
+
+// Ник: без управляющих символов и скобок, до 16 знаков; пустой — «Игрок N»
+function cleanName(raw, slot) {
+  const n = String(raw || '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 16);
+  return n || 'Игрок ' + slot.slice(1);
+}
 
 function send(ws, obj) {
   if (ws && ws.readyState === 1) ws.send(typeof obj === 'string' ? obj : JSON.stringify(obj));
@@ -97,7 +104,10 @@ function slotsList() {
 }
 
 function broadcastPlayers() {
-  const msg = { t: 'players', slots: slotsList() };
+  const slots = slotsList();
+  const nm = {};
+  for (const s of slots) nm[s] = names.get(s) || 'Игрок ' + s.slice(1);
+  const msg = { t: 'players', slots, names: nm };
   send(host, msg);
   for (const ws of guests.values()) send(ws, msg);
 }
@@ -110,6 +120,7 @@ function slotOf(ws) {
 function closeRoom() {
   for (const ws of guests.values()) send(ws, { t: 'peer-left', slot: 'p1' });
   guests.clear();
+  names.clear();
   host = null;
   hostInfo = null;
   started = false;
@@ -124,12 +135,25 @@ function leave(ws) {
   const slot = slotOf(ws);
   if (!slot) return;
   guests.delete(slot);
+  names.delete(slot);
   send(host, { t: 'peer-left', slot });
   if (!started) broadcastPlayers();
   console.log(`Игрок ${slot} вышел из игры`);
 }
 
+// Проверка связи: телефон уснул или пропал Wi-Fi — через ~15 секунд игрок считается вышедшим
+const HEARTBEAT_MS = 5000;
+setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.isAlive === false) { ws.terminate(); continue; }
+    ws.isAlive = false;
+    try { ws.ping(); } catch (e) {}
+  }
+}, HEARTBEAT_MS).unref();
+
 wss.on('connection', (ws) => {
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
   ws.on('message', (data) => {
     const text = data.toString();
     let msg;
@@ -141,6 +165,8 @@ wss.on('connection', (ws) => {
       hostInfo = { mode: msg.mode, mapId: msg.mapId };
       started = false;
       guests.clear();
+      names.clear();
+      names.set('p1', cleanName(msg.name, 'p1'));
       send(ws, { t: 'hosted', addresses: lanAddresses().map((a) => `${a}:${PORT}`) });
       broadcastPlayers();
       console.log(`Создана игра по сети: ${msg.mode}`);
@@ -152,9 +178,19 @@ wss.on('connection', (ws) => {
       const slot = SLOTS.find((s) => !guests.has(s));
       if (!slot) { send(ws, { t: 'busy' }); return; }
       guests.set(slot, ws);
+      names.set(slot, cleanName(msg.name, slot));
       send(ws, { t: 'joined', slot, ...hostInfo });
       broadcastPlayers();
-      console.log(`Игрок ${slot} присоединился`);
+      console.log(`Игрок ${slot} (${names.get(slot)}) присоединился`);
+      return;
+    }
+    if (msg.t === 'name') {
+      // Игрок сменил ник в лобби
+      const slot = ws === host ? 'p1' : slotOf(ws);
+      if (slot && !started) {
+        names.set(slot, cleanName(msg.name, slot));
+        broadcastPlayers();
+      }
       return;
     }
     if (msg.t === 'mode') {

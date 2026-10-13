@@ -27,7 +27,7 @@ import { completeMission, getCampaignDifficulty, getMissionById } from './campai
 import { initYandex, notifyGameReady, showFullscreenAd, onSystemPause } from './yandex.js';
 import { geysers } from './world.js';
 import { IS_TOUCH, showAlert, showMessage } from './ui.js';
-import { session, isNetGame, isSurvivalMode, isFriendly, setRemoteNotify, teamOfCtrl } from './session.js';
+import { session, isNetGame, isSurvivalMode, isFriendly, setRemoteNotify, teamOfCtrl, nameOf } from './session.js';
 import { setCommandScene, executeCommand } from './commands.js';
 import { initSurvival, updateSurvival, getSurvivalInfo, SURVIVAL_MAP, SURVIVAL_EXTRA, getSurvivalBases, ARENA } from './survival.js';
 import { onNet, netSend } from './net.js';
@@ -171,6 +171,7 @@ function startGame() {
 
     if (bot) bindBotEvents(map);
     bindSurvivalEvents();
+    if (isNetGame()) buildPlayersBar();
     if (isNetGame()) bindNetEvents();
     if (session.role === 'guest') initGuestView(scene);
 
@@ -280,6 +281,28 @@ function bindSurvivalEvents() {
   });
 }
 
+// Полоска с игроками вверху экрана: ник и цвет (вы / союзник / соперник)
+function buildPlayersBar() {
+  let bar = document.getElementById('players-bar');
+  if (bar) bar.remove();
+  bar = document.createElement('div');
+  bar.id = 'players-bar';
+  for (const c of session.players) {
+    const chip = document.createElement('span');
+    const mine = c === session.localCtrl;
+    const ally = teamOfCtrl(c) === session.localTeam;
+    chip.className = 'pchip ' + (mine ? 'me' : ally ? 'ally' : 'enemy');
+    chip.dataset.ctrl = c;
+    chip.textContent = '● ' + nameOf(c) + (mine ? ' (вы)' : '');
+    bar.appendChild(chip);
+  }
+  document.body.appendChild(bar);
+}
+
+function markPlayerLeft(ctrl) {
+  document.querySelector(`#players-bar .pchip[data-ctrl="${ctrl}"]`)?.classList.add('off');
+}
+
 function bindNetEvents() {
   if (session.role === 'host') {
     // msg.from проставляет сервер — подделать чужое место нельзя
@@ -288,8 +311,9 @@ function bindNetEvents() {
     });
     setRemoteNotify((ctrl, kind, payload) => netSend({ t: 'note', kind, payload, to: ctrl }));
     onNet('peer-left', (msg) => {
-      const n = session.players.indexOf(msg.slot) + 1;
-      showAlert(`⚠️ Игрок ${n || ''} отключился`, 'danger', 8000);
+      announce(`⚠️ ${nameOf(msg.slot)} отключился`, 'danger', 8000);
+      markPlayerLeft(msg.slot);
+      netSend({ t: 'note', kind: 'left', payload: msg.slot });
     });
     onNet('closed', () => showAlert('⚠️ Связь с сервером потеряна', 'danger', 8000));
   } else {
@@ -300,6 +324,7 @@ function bindNetEvents() {
     onNet('note', (msg) => {
       if (msg.kind === 'hint') showHint(msg.payload);
       else if (msg.kind === 'sound') playSound(msg.payload);
+      else if (msg.kind === 'left') markPlayerLeft(msg.payload);
       else if (msg.kind === 'alert') {
         showAlert(msg.payload.text, msg.payload.type, msg.payload.duration);
         if (msg.payload.sound) playSound(msg.payload.sound);
@@ -309,7 +334,7 @@ function bindNetEvents() {
       if (isGameOver()) return;
       showMessage(text, { okText: 'В меню' }).then(() => returnToMenu());
     };
-    onNet('peer-left', () => lost('Хост вышел из игры.'));
+    onNet('peer-left', () => lost(`${nameOf('p1')} (хост) вышел из игры.`));
     onNet('closed', () => lost('Связь с компьютером хоста потеряна.'));
   }
 }

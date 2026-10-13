@@ -1525,3 +1525,23 @@ body.touch .desktop-only { display: none; }
   background: rgba(20,16,10,0.85); border: 1px solid rgba(200,152,72,0.2); color: #8a7a55; }
 .net-player.here { color: #e0c890; border-color: rgba(200,152,72,0.6); }
 .net-wait { color: #6a5a40; font-size: 11px; }
+
+/* === Ники игроков === */
+.net-nick { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 0 0 16px; flex-wrap: wrap; }
+.net-nick label { color: #a89060; font-size: 12px; letter-spacing: 2px; text-transform: uppercase; }
+.net-nick input {
+  width: min(260px, 70vw); padding: 10px 12px; font-family: inherit; font-size: 14px;
+  background: rgba(10,8,6,0.9); border: 1px solid rgba(200,152,72,0.5); color: #f0d8a8;
+  user-select: text; -webkit-user-select: text;
+}
+.net-nick input:focus { outline: none; border-color: #e0c088; }
+
+#players-bar {
+  position: fixed; top: 6px; left: 50%; transform: translateX(-50%); z-index: 14;
+  display: flex; gap: 6px; pointer-events: none; max-width: 60vw; flex-wrap: wrap; justify-content: center;
+}
+.pchip { padding: 3px 9px; font-size: 11px; font-weight: bold; background: rgba(12,10,8,0.85); border: 1px solid; }
+.pchip.me { color: #ffcc44; border-color: #c89848; }
+.pchip.ally { color: #7ae0a0; border-color: #3a9a66; }
+.pchip.enemy { color: #ff8a8a; border-color: #aa4455; }
+.pchip.off { opacity: 0.4; text-decoration: line-through; }

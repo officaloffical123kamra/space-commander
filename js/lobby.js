@@ -3,7 +3,9 @@
 // хост нажимает «Начать игру». Работает только при запуске игры через локальный сервер
 // (node tools/serve.mjs), все устройства должны быть в одной Wi-Fi сети.
 import { netConnect, netSend, onNet, netClose } from './net.js';
-import { session, teamOfCtrl } from './session.js';
+import { session, teamOfCtrl, playerNames } from './session.js';
+import { showAlert } from './ui.js';
+import { storageGet, storageSet } from './storage.js';
 import { MAPS } from './maps.js';
 import { playClick } from './audio.js';
 
@@ -14,6 +16,8 @@ let mode = 'coop';
 let mapId = 'classic';
 let addresses = [];
 let slots = ['p1'];     // кто сейчас в комнате
+let names = {};         // ники по местам
+let nick = '';          // мой ник
 let mySlot = 'p1';
 let errorText = '';
 
@@ -22,12 +26,40 @@ const MODES = [
   { id: 'pvp',  icon: '⚔', title: 'Друг против друга',  desc: '2 игрока — один на один. 3 игрока — двое против одного. 4 игрока — две команды по двое.' }
 ];
 
-const PLAYER_NAMES = { p1: 'Игрок 1 (хост)', p2: 'Игрок 2', p3: 'Игрок 3', p4: 'Игрок 4' };
 const ALL_SLOTS = ['p1', 'p2', 'p3', 'p4'];
+
+function displayName(s) {
+  return names[s] || 'Игрок ' + s.slice(1);
+}
+
+// Уведомления «вошёл / вышел» по изменению списка
+function announceChanges(oldSlots, oldNames, newSlots) {
+  for (const s of newSlots) {
+    if (!oldSlots.includes(s) && s !== mySlot && s !== 'p1') showAlert('✅ ' + displayName(s) + ' присоединился', 'success', 4000);
+  }
+  for (const s of oldSlots) {
+    if (!newSlots.includes(s) && s !== 'p1') showAlert('👋 ' + (oldNames[s] || 'Игрок ' + s.slice(1)) + ' вышел', 'warn', 4000);
+  }
+}
 
 export function initLobby({ startGame, showScreen }) {
   onStart = startGame;
   showScreenFn = showScreen;
+
+  // Ник запоминается между запусками
+  const input = document.getElementById('net-nick');
+  nick = (storageGet('rts_nick') || '').slice(0, 16);
+  if (input) {
+    input.value = nick;
+    input.addEventListener('input', () => {
+      nick = input.value.slice(0, 16);
+      storageSet('rts_nick', nick);
+    });
+    // Смена ника в уже созданной комнате — друзья увидят сразу
+    input.addEventListener('change', () => {
+      if (phase === 'hosting' || phase === 'joined') netSend({ t: 'name', name: nick });
+    });
+  }
 
   onNet('hosted', (msg) => {
     addresses = msg.addresses || [];
@@ -36,8 +68,14 @@ export function initLobby({ startGame, showScreen }) {
     render();
   });
   onNet('players', (msg) => {
+    const oldSlots = slots;
+    const oldNames = names;
     slots = msg.slots || ['p1'];
-    if (phase === 'hosting' || phase === 'joined') render();
+    names = msg.names || {};
+    if (phase === 'hosting' || phase === 'joined') {
+      announceChanges(oldSlots, oldNames, slots);
+      render();
+    }
   });
   onNet('joined', (msg) => {
     mySlot = msg.slot;
@@ -71,7 +109,7 @@ export function initLobby({ startGame, showScreen }) {
   });
   onNet('start', (msg) => {
     if (phase !== 'joined') return;
-    launch('guest', msg.mode, msg.mapId, msg.players || slots);
+    launch('guest', msg.mode, msg.mapId, msg.players || slots, msg.names || names);
   });
 }
 
@@ -89,7 +127,9 @@ export async function openLobby() {
   render();
 }
 
-function launch(role, m, map, players) {
+function launch(role, m, map, players, nameMap) {
+  for (const k of Object.keys(playerNames)) delete playerNames[k];
+  Object.assign(playerNames, nameMap || {});
   session.role = role;
   session.mode = m;
   session.mapId = map;
@@ -124,12 +164,13 @@ function playersList() {
   for (const s of ALL_SLOTS) {
     const here = slots.includes(s);
     const row = el('div', 'net-player' + (here ? ' here' : ''));
-    const you = s === mySlot ? ' — это вы' : '';
+    const you = s === mySlot ? ' (вы)' : '';
+    const hostMark = s === 'p1' ? ' 👑' : '';
     let team = '';
     if (mode === 'pvp' && here) {
       team = slots.indexOf(s) % 2 === 0 ? ' · 🔵 синие' : ' · 🔴 красные';
     }
-    row.appendChild(el('span', '', (here ? '✅ ' : '⏳ ') + PLAYER_NAMES[s] + you + team));
+    row.appendChild(el('span', '', here ? '✅ ' + displayName(s) + hostMark + you + team : '⏳ Свободное место'));
     if (!here) row.appendChild(el('span', 'net-wait', 'ждём…'));
     list.appendChild(row);
   }
@@ -177,8 +218,8 @@ function render() {
     const buttons = el('div', 'menu-buttons');
     const start = button(`▶ Начать игру (${slots.length}/4)`, 'primary', () => {
       if (slots.length < 2) return;
-      netSend({ t: 'start', mode, mapId, players: slots });
-      launch('host', mode, mapId, slots);
+      netSend({ t: 'start', mode, mapId, players: slots, names });
+      launch('host', mode, mapId, slots, names);
     });
     if (slots.length < 2) {
       start.disabled = true;
@@ -231,11 +272,11 @@ function render() {
   buttons.appendChild(button('➕ Создать игру', 'primary', () => {
     errorText = '';
     slots = ['p1'];
-    netSend({ t: 'host', mode, mapId });
+    netSend({ t: 'host', mode, mapId, name: nick });
   }));
   buttons.appendChild(button('🔗 Присоединиться', '', () => {
     errorText = '';
-    netSend({ t: 'join' });
+    netSend({ t: 'join', name: nick });
   }));
   buttons.appendChild(backButton(true));
   box.appendChild(buttons);

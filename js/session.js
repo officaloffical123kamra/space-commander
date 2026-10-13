@@ -19,6 +19,13 @@ export const session = {
 
 export const ALL_CTRLS = ['p1', 'p2', 'p3', 'p4'];
 
+// Ники игроков (в игре по сети): { p1: 'Вася', p2: 'Петя', ... }
+export const playerNames = {};
+
+export function nameOf(ctrl) {
+  return playerNames[ctrl] || 'Игрок ' + String(ctrl || '').slice(1);
+}
+
 export function isNetGame() {
   return session.role !== 'local';
 }
