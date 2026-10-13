@@ -134,7 +134,10 @@ export function initMenu(startGameCallback) {
 
   loadAllModels();
 
-  try { initMenu3D(); } catch (err) {}
+  // ?lite в адресе — без 3D-фона меню (для автотестов и слабых устройств)
+  if (!location.search.includes('lite')) {
+    try { initMenu3D(); } catch (err) {}
+  }
 
   document.getElementById('hud')?.classList.add('hidden');
   document.getElementById('bottom-bar')?.classList.add('hidden');

@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import {
   units, makeUnit, drawHpBar, toggleSiege, toggleTransform, isHiddenFrom
 } from './units.js';
-import { createWorker, state, state2, updateHud } from './economy.js';
+import { createWorker, state, getEco, updateHud } from './economy.js';
 import {
   createBarracks, createFactory, createStarport, createRefinery, createStorage,
   createBunker, createSensor, createTurret, createEngineering, createArmory,
@@ -23,8 +23,8 @@ import { assignId, getById, forgetId } from './ids.js';
 import { session, teamOfCtrl } from './session.js';
 import { netSend } from './net.js';
 
-const CTRL_CODE = { p1: 1, p2: 2, ai: 0 };
-const CODE_CTRL = ['ai', 'p1', 'p2'];
+const CTRL_CODE = { ai: 0, p1: 1, p2: 2, p3: 3, p4: 4 };
+const CODE_CTRL = ['ai', 'p1', 'p2', 'p3', 'p4'];
 const BOSS_TYPES = ['titan', 'hydra', 'ark'];
 
 const r2 = (v) => Math.round(v * 100) / 100;
@@ -48,8 +48,9 @@ function unitFlags(u) {
   return f;
 }
 
-export function buildSnapshot(extra = {}) {
-  const guestTeam = teamOfCtrl('p2');
+// forTeam — команда получателя: невидимок чужой команды без детекции ему не показываем
+export function buildSnapshot(forTeam, extra = {}) {
+  const guestTeam = forTeam;
   const us = [];
   for (const u of units) {
     if (!u || u.dead || u.hp <= 0 || !u.mesh) continue;
@@ -91,14 +92,35 @@ export function buildSnapshot(extra = {}) {
     t: 'snap',
     us, bs, cs,
     res: [mineralPatches.map((m) => m.amount), geysers.map((g) => g.amount)],
-    eco: { m: Math.floor(state2.minerals), v: Math.floor(state2.vespene), max: state2.armyMax },
+    eco: ecoOfGuests(),
     upg: [upgrades, botUpgrades],
     ...extra
   };
 }
 
+// Ресурсы каждого игрока по сети (получатель берёт свои)
+function ecoOfGuests() {
+  const out = {};
+  for (const c of session.players) {
+    if (c === session.localCtrl) continue;
+    const e = getEco(c);
+    if (e) out[c] = { m: Math.floor(e.minerals), v: Math.floor(e.vespene), max: e.armyMax };
+  }
+  return out;
+}
+
+// Отправить снимок всем друзьям: один снимок на команду
 export function sendSnapshot(extra) {
-  netSend(buildSnapshot(extra));
+  const byTeam = new Map();
+  for (const c of session.players) {
+    if (c === session.localCtrl) continue;
+    const team = teamOfCtrl(c);
+    if (!byTeam.has(team)) byTeam.set(team, []);
+    byTeam.get(team).push(c);
+  }
+  for (const [team, ctrls] of byTeam) {
+    netSend({ ...buildSnapshot(team, extra), to: ctrls });
+  }
 }
 
 // ============================================================
@@ -340,10 +362,11 @@ export function applySnapshot(snap) {
   const added = applyBuildings(snap.bs || []);
   applyConstructions(snap.cs || []);
   if (snap.res) applyResources(snap.res);
-  if (snap.eco) {
-    state.minerals = snap.eco.m;
-    state.vespene = snap.eco.v;
-    state.armyMax = snap.eco.max;
+  const mine = snap.eco && snap.eco[session.localCtrl];
+  if (mine) {
+    state.minerals = mine.m;
+    state.vespene = mine.v;
+    state.armyMax = mine.max;
     updateHud();
   }
   if (snap.upg) {

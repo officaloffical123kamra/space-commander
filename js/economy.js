@@ -30,10 +30,15 @@ export const state2 = {
   armyMax: 20
 };
 
-// Кошелёк управляющего: 'p1' → state, 'p2' → state2, бот — null
+export const state3 = { minerals: 1000, vespene: 1000, armyUsed: 0, armyMax: 20 };
+export const state4 = { minerals: 1000, vespene: 1000, armyUsed: 0, armyMax: 20 };
+
+// Кошелёк управляющего: 'p1' → state, 'p2' → state2 и т.д., бот — null
 export function getEco(ctrl) {
   if (ctrl === 'p1') return state;
   if (ctrl === 'p2') return state2;
+  if (ctrl === 'p3') return state3;
+  if (ctrl === 'p4') return state4;
   return null;
 }
 

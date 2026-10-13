@@ -3,17 +3,21 @@
 //
 // Команда (team) — сторона в бою: 'player' или 'bot'. По ней работают бой, туман, победа.
 // Управляющий (ctrl) — кто отдаёт приказы и платит: 'p1' (хост/одиночная игра),
-// 'p2' (друг по сети) или 'ai' (бот/волны).
-//   Кооператив: p1 и p2 оба в команде 'player'.
-//   Против друга: p2 играет за команду 'bot' (бот при этом выключен).
+// 'p2'..'p4' (друзья по сети) или 'ai' (бот/волны).
+//   Кооператив и выживание: все игроки в команде 'player'.
+//   Против друзей: p1 и p3 — команда 'player', p2 и p4 — команда 'bot'
+//   (2 игрока = 1 на 1, 3 = 2 на 1, 4 = 2 на 2; бот при этом выключен).
 
 export const session = {
   mode: 'skirmish',   // 'skirmish' | 'campaign' | 'survival' | 'coop' | 'pvp'
   role: 'local',      // 'local' | 'host' | 'guest'
   localCtrl: 'p1',
   localTeam: 'player',
+  players: ['p1'],    // кто участвует в матче, по порядку мест
   actor: null         // чей приказ сейчас выполняется (для подсказок по сети)
 };
+
+export const ALL_CTRLS = ['p1', 'p2', 'p3', 'p4'];
 
 export function isNetGame() {
   return session.role !== 'local';
@@ -36,9 +40,10 @@ export function ctrlOf(o) {
 }
 
 export function teamOfCtrl(ctrl) {
-  if (ctrl === 'p1') return 'player';
-  if (ctrl === 'p2') return session.mode === 'pvp' ? 'bot' : 'player';
-  return 'bot';
+  if (ctrl === 'ai') return 'bot';
+  // Друг против друга: команды чередуются по порядку мест (1-й и 3-й — синие, 2-й и 4-й — красные)
+  if (session.mode === 'pvp') return session.players.indexOf(ctrl) % 2 === 0 ? 'player' : 'bot';
+  return 'player';
 }
 
 export function isMine(o) {
@@ -65,11 +70,11 @@ export function setRemoteNotify(fn) {
 
 // true — сообщение отправлено другу и показывать его локально не нужно
 export function routeToRemote(kind, payload) {
+  if (session.actor === 'ai') return true; // боту подсказки не нужны
   if (session.role === 'host' && session.actor && session.actor !== session.localCtrl) {
     if (remoteNotify) remoteNotify(session.actor, kind, payload);
     return true;
   }
-  if (session.actor === 'ai') return true; // боту подсказки не нужны
   return false;
 }
 

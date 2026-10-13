@@ -1,4 +1,4 @@
-// Локальный сервер: раздаёт игру и связывает двух игроков для игры по сети.
+// Локальный сервер: раздаёт игру и связывает игроков для игры по сети (до 4 человек).
 // Запуск:  node tools/serve.mjs   (или npm run serve)
 // Затем откройте в браузере адрес, который будет напечатан.
 import http from 'node:http';
@@ -7,6 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import { listSoundFiles } from './sounds-index.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT) || 8080;
@@ -19,6 +20,8 @@ const TYPES = {
   '.json': 'application/json',
   '.glb': 'model/gltf-binary',
   '.mp3': 'audio/mpeg',
+  '.ogg': 'audio/ogg',
+  '.wav': 'audio/wav',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.svg': 'image/svg+xml'
@@ -38,6 +41,16 @@ function lanAddresses() {
 
 const server = http.createServer((req, res) => {
   const url = decodeURIComponent(req.url.split('?')[0]);
+
+  // Список звуковых файлов, которые реально лежат в assets/sounds.
+  // Игра по нему узнаёт, какие звуки загружать (положили файл — звук появился сам).
+  if (url === '/assets/sounds/index.json') {
+    const body = JSON.stringify(listSoundFiles(ROOT));
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
+    res.end(body);
+    return;
+  }
+
   const file = path.join(ROOT, url === '/' ? 'index.html' : url);
   if (!file.startsWith(ROOT)) { res.writeHead(403); res.end(); return; }
   fs.stat(file, (err, st) => {
@@ -64,30 +77,56 @@ const server = http.createServer((req, res) => {
 });
 
 // ============================================================
-// ИГРА ПО СЕТИ: одна комната — хост и друг. Сервер только пересылает сообщения.
+// ИГРА ПО СЕТИ: одна комната — хост (p1) и до 3 друзей (p2, p3, p4).
+// Сервер только пересылает сообщения и подписывает, от кого пришёл приказ.
 // ============================================================
 
+const SLOTS = ['p2', 'p3', 'p4'];
 const wss = new WebSocketServer({ server, path: '/ws' });
 let host = null;
-let guest = null;
 let hostInfo = null;
+let started = false;
+const guests = new Map(); // слот -> ws
 
 function send(ws, obj) {
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+  if (ws && ws.readyState === 1) ws.send(typeof obj === 'string' ? obj : JSON.stringify(obj));
+}
+
+function slotsList() {
+  return ['p1', ...SLOTS.filter((s) => guests.has(s))];
+}
+
+function broadcastPlayers() {
+  const msg = { t: 'players', slots: slotsList() };
+  send(host, msg);
+  for (const ws of guests.values()) send(ws, msg);
+}
+
+function slotOf(ws) {
+  for (const [slot, g] of guests) if (g === ws) return slot;
+  return null;
+}
+
+function closeRoom() {
+  for (const ws of guests.values()) send(ws, { t: 'peer-left', slot: 'p1' });
+  guests.clear();
+  host = null;
+  hostInfo = null;
+  started = false;
 }
 
 function leave(ws) {
   if (ws === host) {
-    host = null;
-    hostInfo = null;
-    if (guest) send(guest, { t: 'peer-left' });
-    guest = null;
+    closeRoom();
     console.log('Хост вышел из игры');
-  } else if (ws === guest) {
-    guest = null;
-    if (host) send(host, { t: 'peer-left' });
-    console.log('Друг вышел из игры');
+    return;
   }
+  const slot = slotOf(ws);
+  if (!slot) return;
+  guests.delete(slot);
+  send(host, { t: 'peer-left', slot });
+  if (!started) broadcastPlayers();
+  console.log(`Игрок ${slot} вышел из игры`);
 }
 
 wss.on('connection', (ws) => {
@@ -97,21 +136,33 @@ wss.on('connection', (ws) => {
     try { msg = JSON.parse(text); } catch (e) { return; }
 
     if (msg.t === 'host') {
-      if (host && host !== ws) leave(host);
+      if (host && host !== ws) closeRoom();
       host = ws;
       hostInfo = { mode: msg.mode, mapId: msg.mapId };
-      guest = null;
+      started = false;
+      guests.clear();
       send(ws, { t: 'hosted', addresses: lanAddresses().map((a) => `${a}:${PORT}`) });
+      broadcastPlayers();
       console.log(`Создана игра по сети: ${msg.mode}`);
       return;
     }
     if (msg.t === 'join') {
       if (!host || host === ws || host.readyState !== 1) { send(ws, { t: 'no-host' }); return; }
-      if (guest && guest !== ws && guest.readyState === 1) { send(ws, { t: 'busy' }); return; }
-      guest = ws;
-      send(ws, { t: 'joined', ...hostInfo });
-      send(host, { t: 'guest-joined' });
-      console.log('Друг присоединился');
+      if (started || slotOf(ws)) { send(ws, { t: 'busy' }); return; }
+      const slot = SLOTS.find((s) => !guests.has(s));
+      if (!slot) { send(ws, { t: 'busy' }); return; }
+      guests.set(slot, ws);
+      send(ws, { t: 'joined', slot, ...hostInfo });
+      broadcastPlayers();
+      console.log(`Игрок ${slot} присоединился`);
+      return;
+    }
+    if (msg.t === 'mode') {
+      // Хост поменял режим/карту в лобби — друзья видят актуальное
+      if (ws === host) {
+        hostInfo = { mode: msg.mode, mapId: msg.mapId };
+        for (const g of guests.values()) send(g, { t: 'mode', ...hostInfo });
+      }
       return;
     }
     if (msg.t === 'leave') {
@@ -119,9 +170,22 @@ wss.on('connection', (ws) => {
       return;
     }
 
-    // Всё остальное (старт, снимки, приказы, подсказки) — пересылаем второму игроку
-    const peer = ws === host ? guest : ws === guest ? host : null;
-    if (peer && peer.readyState === 1) peer.send(text);
+    if (ws === host) {
+      if (msg.t === 'start') started = true;
+      // msg.to — кому (слот или список слотов); без него — всем друзьям
+      const to = msg.to == null ? null : [].concat(msg.to);
+      for (const [slot, g] of guests) {
+        if (!to || to.includes(slot)) send(g, text);
+      }
+      return;
+    }
+
+    // От друга — только хосту, с пометкой кто прислал (подделать нельзя)
+    const slot = slotOf(ws);
+    if (slot && host) {
+      msg.from = slot;
+      send(host, msg);
+    }
   });
   ws.on('close', () => leave(ws));
 });
@@ -130,7 +194,7 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`Игра: http://localhost:${PORT}/`);
   const addrs = lanAddresses();
   if (addrs.length) {
-    console.log(`С телефона / для друга: http://${addrs[0]}:${PORT}/`);
+    console.log(`С телефона / для друзей: http://${addrs[0]}:${PORT}/`);
     for (const a of addrs.slice(1)) console.log(`   (другие адреса компьютера: http://${a}:${PORT}/)`);
   }
 });

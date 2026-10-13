@@ -47,7 +47,9 @@ export function createRenderer() {
     antialias: !IS_TOUCH,
     powerPreference: 'high-performance'
   });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, IS_TOUCH ? 1.5 : 2));
+  renderer.setPixelRatio(location.search.includes('lite')
+    ? 0.3  // ?lite — для автотестов: несколько браузеров на одном ПК
+    : Math.min(window.devicePixelRatio || 1, IS_TOUCH ? 1.5 : 2));
   renderer.setSize(innerWidth, innerHeight);
   renderer.domElement.id = 'game-canvas';
   document.body.appendChild(renderer.domElement);

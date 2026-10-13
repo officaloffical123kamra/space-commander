@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
+import { listSoundFiles } from './sounds-index.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT_DIR = path.join(ROOT, 'dist');
@@ -17,7 +18,8 @@ const INCLUDE = ['index.html', 'css', 'js', 'assets'];
 // Служебное, что не должно попасть в релиз
 const EXCLUDE = [
   'js/code',                 // заметки с читами для localStorage
-  'assets/models/manifest.json'
+  'assets/models/manifest.json',
+  'assets/sounds/README.txt'
 ];
 const LIMIT_MB = 100;
 
@@ -59,14 +61,17 @@ function dosTime(d) {
   return { time, date };
 }
 
-function buildZip(files) {
+// files — пути на диске; extra — файлы, которых на диске нет: { rel, data }
+function buildZip(files, extra = []) {
   const chunks = [];
   const central = [];
   let offset = 0;
   const { time, date } = dosTime(new Date());
 
-  for (const rel of files) {
-    const data = fs.readFileSync(path.join(ROOT, rel));
+  const entries = [...files.map((rel) => ({ rel, data: null })), ...extra];
+  for (const entry of entries) {
+    const rel = entry.rel;
+    const data = entry.data || fs.readFileSync(path.join(ROOT, rel));
     const crc = crc32(data);
     // mp3/glb уже сжаты — храним как есть, остальное — deflate
     const already = /\.(mp3|ogg|png|jpe?g|webp|glb)$/i.test(rel);
@@ -111,8 +116,8 @@ function buildZip(files) {
   const centralBuf = Buffer.concat(central);
   const end = Buffer.alloc(22);
   end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(files.length, 8);
-  end.writeUInt16LE(files.length, 10);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
   end.writeUInt32LE(centralBuf.length, 12);
   end.writeUInt32LE(offset, 16);
   return Buffer.concat([...chunks, centralBuf, end]);
@@ -136,9 +141,11 @@ if (missing.length) {
 }
 
 fs.mkdirSync(OUT_DIR, { recursive: true });
-const zip = buildZip(files);
+// Список звуков для игры (на сервере Яндекса каталог читать нельзя)
+const soundIndex = Buffer.from(JSON.stringify(listSoundFiles(ROOT)));
+const zip = buildZip(files, [{ rel: 'assets/sounds/index.json', data: soundIndex }]);
 fs.writeFileSync(OUT, zip);
 
 const mb = zip.length / 1024 / 1024;
-console.log(`✅ ${path.relative(ROOT, OUT)} — ${files.length} файлов, ${mb.toFixed(1)} МБ`);
+console.log(`✅ ${path.relative(ROOT, OUT)} — ${files.length + 1} файлов, ${mb.toFixed(1)} МБ`);
 if (mb > LIMIT_MB) console.warn(`⚠️ Архив больше ${LIMIT_MB} МБ — Яндекс его не примет`);

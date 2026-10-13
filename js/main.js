@@ -6,7 +6,7 @@ import { createDecor } from './decor.js';
 import { updateUnits, units, setBuildingsProvider, combatStats, isHiddenFrom } from './units.js';
 import { setupControls } from './controls.js';
 import { state, createWorker, updateWorker, updateHud, updateArmyHud } from './economy.js';
-import { updateBuildings, updateConstructions, checkGarrisonArrival, buildings, commandCenters, updateRepairs, updateSensorRadars, showHint } from './build.js';
+import { updateBuildings, updateConstructions, checkGarrisonArrival, buildings, commandCenters, updateRepairs, updateSensorRadars, showHint, createTurret } from './build.js';
 import { createBot, updateBot } from './bot.js';
 import { updatePortrait, updateSelectionRings, selection, updateQueueOnly, pruneSelection, renderBuildRow } from './selection.js';
 import { drawMinimap } from './minimap.js';
@@ -27,9 +27,9 @@ import { completeMission, getCampaignDifficulty, getMissionById } from './campai
 import { initYandex, notifyGameReady, showFullscreenAd, onSystemPause } from './yandex.js';
 import { geysers } from './world.js';
 import { IS_TOUCH, showAlert, showMessage } from './ui.js';
-import { session, isNetGame, isSurvivalMode, isFriendly, setRemoteNotify } from './session.js';
+import { session, isNetGame, isSurvivalMode, isFriendly, setRemoteNotify, teamOfCtrl } from './session.js';
 import { setCommandScene, executeCommand } from './commands.js';
-import { initSurvival, updateSurvival, getSurvivalInfo, SURVIVAL_MAP, SURVIVAL_LAYOUTS } from './survival.js';
+import { initSurvival, updateSurvival, getSurvivalInfo, SURVIVAL_MAP, SURVIVAL_EXTRA, getSurvivalBases, ARENA } from './survival.js';
 import { onNet, netSend } from './net.js';
 import { sendSnapshot, initGuestView, applySnapshot, tickGuestView, getLastSnapshot } from './netsync.js';
 
@@ -75,19 +75,27 @@ function spawnBase(base) {
 // по этому порядку (номеру) они и синхронизируются.
 function setupWorld(map) {
   const mode = session.mode;
+  const players = session.players;
   const bases = [];
+  const addBase = (b, ctrl) => bases.push(makeBase(b.cc, b.mins, b.geys, teamOfCtrl(ctrl), ctrl));
 
   if (isSurvivalMode()) {
-    const layout = mode === 'coop' ? SURVIVAL_LAYOUTS.coop : SURVIVAL_LAYOUTS.solo;
-    bases.push(makeBase(layout.p1.cc, layout.p1.mins, layout.p1.geys, 'player', 'p1'));
-    if (layout.p2) bases.push(makeBase(layout.p2.cc, layout.p2.mins, layout.p2.geys, 'player', 'p2'));
-    for (const m of SURVIVAL_LAYOUTS.extraMins) createMineralPatch(scene, m.x, m.z);
-    for (const g of SURVIVAL_LAYOUTS.extraGeys) createGeyser(scene, g.x, g.z);
-  } else if (mode === 'pvp') {
-    bases.push(makeBase(map.playerCC, map.playerMins, map.playerGeys, 'player', 'p1'));
-    bases.push(makeBase(map.botCC, map.botMins, map.botGeys, 'bot', 'p2'));
+    // Кооператив: у каждого игрока своя база рядом (по порядку мест)
+    const layout = getSurvivalBases(players.length);
+    players.forEach((c, i) => addBase(layout[i], c));
+    for (const m of SURVIVAL_EXTRA.mins) createMineralPatch(scene, m.x, m.z);
+    for (const g of SURVIVAL_EXTRA.geys) createGeyser(scene, g.x, g.z);
+  } else if (mode === 'pvp' && players.length <= 2) {
+    // Один на один — на выбранной карте
+    bases.push(makeBase(map.playerCC, map.playerMins, map.playerGeys, 'player', players[0]));
+    bases.push(makeBase(map.botCC, map.botMins, map.botGeys, 'bot', players[1]));
     for (const m of map.extraMins || []) createMineralPatch(scene, m.x, m.z);
     for (const g of map.extraGeys || []) createGeyser(scene, g.x, g.z);
+  } else if (mode === 'pvp') {
+    // 3–4 игрока — арена с четырьмя углами
+    players.forEach((c, i) => addBase(ARENA.bases[i], c));
+    for (const m of ARENA.extraMins) createMineralPatch(scene, m.x, m.z);
+    for (const g of ARENA.extraGeys) createGeyser(scene, g.x, g.z);
   } else {
     // Против бота: база бота создаётся в createBot
     bases.push(makeBase(map.playerCC, map.playerMins, map.playerGeys, 'player', 'p1'));
@@ -95,7 +103,14 @@ function setupWorld(map) {
 
   // Объекты — только у хоста/в одиночной игре. Друг получит их по сети.
   if (session.role !== 'guest') {
-    for (const b of bases) spawnBase(b);
+    for (const b of bases) {
+      const cc = spawnBase(b);
+      // В «Выживании» у каждой базы две стартовые турели
+      if (isSurvivalMode()) {
+        createTurret(scene, cc.x + 3, cc.z + 4, 'player', b.ctrl);
+        createTurret(scene, cc.x - 3, cc.z + 4, 'player', b.ctrl);
+      }
+    }
 
     if (mode === 'skirmish' || mode === 'campaign') {
       const difficulty = mission ? getCampaignDifficulty() : getSelectedDifficulty();
@@ -112,7 +127,7 @@ function setupWorld(map) {
       for (const eg of map.extraGeys || []) createGeyser(scene, eg.x, eg.z);
     }
 
-    if (isSurvivalMode()) initSurvival(scene, { coop: mode === 'coop' });
+    if (isSurvivalMode()) initSurvival(scene, { players: players.length });
   }
 
   // Камера — между КЦ и минералами, чтобы и база, и добыча были на экране
@@ -207,10 +222,11 @@ function startGame() {
 // СОБЫТИЯ
 // ============================================================
 
-// Уведомление себе и (у хоста) другу
-function announce(text, type = 'info', duration = 3000) {
+// Уведомление себе и (у хоста) всем друзьям. sound — звук тревоги.
+function announce(text, type = 'info', duration = 3000, sound = null) {
   showAlert(text, type, duration);
-  if (session.role === 'host') netSend({ t: 'note', kind: 'alert', payload: { text, type, duration } });
+  if (sound) playSound(sound);
+  if (session.role === 'host') netSend({ t: 'note', kind: 'alert', payload: { text, type, duration, sound } });
 }
 
 function bossOptionsForMission(m) {
@@ -254,21 +270,27 @@ function bindBotEvents(map) {
 
 function bindSurvivalEvents() {
   window.addEventListener('boss-spawn', (e) => {
-    announce(`💀 ${e.detail.name} вышел на бой!`, 'danger', 6000);
+    announce(`💀 ${e.detail.name} вышел на бой!`, 'danger', 6000, 'ui_alert');
   });
   window.addEventListener('survival-wave-prepare', (e) => {
-    announce(`⚠️ Волна ${e.detail.wave} через 5 секунд!`, 'danger', 5000);
+    announce(`⚠️ Волна ${e.detail.wave} через 5 секунд!`, 'danger', 5000, 'ui_alert');
   });
   window.addEventListener('survival-wave', (e) => {
-    announce(`⚔ Волна ${e.detail.wave}: ${e.detail.count} врагов с ${e.detail.sides.join(', ')}`, 'danger', 4500);
+    announce(`⚔ Волна ${e.detail.wave}: ${e.detail.count} врагов с ${e.detail.sides.join(', ')}`, 'danger', 4500, 'wave_start');
   });
 }
 
 function bindNetEvents() {
   if (session.role === 'host') {
-    onNet('cmd', (msg) => executeCommand(msg.cmd, 'p2'));
-    setRemoteNotify((ctrl, kind, payload) => netSend({ t: 'note', kind, payload }));
-    onNet('peer-left', () => showAlert('⚠️ Друг отключился', 'danger', 8000));
+    // msg.from проставляет сервер — подделать чужое место нельзя
+    onNet('cmd', (msg) => {
+      if (session.players.includes(msg.from)) executeCommand(msg.cmd, msg.from);
+    });
+    setRemoteNotify((ctrl, kind, payload) => netSend({ t: 'note', kind, payload, to: ctrl }));
+    onNet('peer-left', (msg) => {
+      const n = session.players.indexOf(msg.slot) + 1;
+      showAlert(`⚠️ Игрок ${n || ''} отключился`, 'danger', 8000);
+    });
     onNet('closed', () => showAlert('⚠️ Связь с сервером потеряна', 'danger', 8000));
   } else {
     onNet('snap', (snap) => {
@@ -278,7 +300,10 @@ function bindNetEvents() {
     onNet('note', (msg) => {
       if (msg.kind === 'hint') showHint(msg.payload);
       else if (msg.kind === 'sound') playSound(msg.payload);
-      else if (msg.kind === 'alert') showAlert(msg.payload.text, msg.payload.type, msg.payload.duration);
+      else if (msg.kind === 'alert') {
+        showAlert(msg.payload.text, msg.payload.type, msg.payload.duration);
+        if (msg.payload.sound) playSound(msg.payload.sound);
+      }
     });
     const lost = (text) => {
       if (isGameOver()) return;
@@ -434,6 +459,7 @@ function onMatchEnd() {
   matchEnded = true;
   setGameActive(false);
   const res = getGameResult();
+  playSound(res && !res.survival && isLocalWin() ? 'victory' : 'defeat');
 
   if (res && res.survival) {
     const waves = Math.max(0, (currentWaveInfo()?.wave || 1) - 1);

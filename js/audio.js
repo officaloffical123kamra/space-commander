@@ -2,52 +2,97 @@
 // Звук на WebAudio:
 //  - эффекты декодируются в буферы и могут звучать одновременно;
 //  - громкость работает и на iOS (там у <audio> громкость не меняется);
-//  - музыка грузится только когда нужна (раньше при старте качались все 38 МБ);
+//  - музыка грузится только когда нужна;
 //  - звук можно приостановить по причине (свёрнута вкладка, реклама, пауза SDK).
+//
+// ДОБАВИТЬ СВОЙ ЗВУК: положите файл в папку assets/sounds/ с именем из списка ниже
+// (см. также assets/sounds/README.txt). Код менять не нужно: игра сама находит файлы.
+// Подходят .mp3, .ogg и .wav. Нет файла — этот звук просто не играет.
 import { storageGet, storageSet } from './storage.js';
 
-// Только файлы, которые реально есть в assets/sounds.
-// Чтобы добавить звук — положите файл и допишите строку сюда
-// (например voice_marauder_select — путь к voices/marauder/select.mp3).
-const SFX = {
-  ui_click:            'assets/sounds/ui/click.mp3',
-  ui_ready:            'assets/sounds/ui/ready.mp3',
-  ui_error:            'assets/sounds/ui/error.mp3',
+const UNITS = ['marine', 'marauder', 'ghost', 'medic', 'hellion', 'tank', 'thor', 'viking', 'banshee', 'battlecruiser'];
 
-  marine_shoot:        'assets/sounds/units/marine_shoot.mp3',
-  ghost_shoot:         'assets/sounds/units/ghost_shoot.mp3',
-  tank_shoot:          'assets/sounds/units/tank_shoot.mp3',
-  turret_shoot:        'assets/sounds/units/tank_shoot.mp3',
+// ключ в коде -> путь внутри assets/sounds БЕЗ расширения
+const SFX_SLOTS = {
+  // интерфейс
+  ui_click: 'ui/click',
+  ui_ready: 'ui/ready',
+  ui_error: 'ui/error',
+  ui_select: 'ui/select',
+  ui_order: 'ui/order',
+  ui_build_complete: 'ui/build_complete',
+  ui_alert: 'ui/alert',            // тревога: предупреждение о волне, выход босса
 
-  marine_death:        'assets/sounds/units/marine_death.mp3',
-  ghost_death:         'assets/sounds/units/ghost_death.mp3',
-  tank_death:          'assets/sounds/units/tank_death.mp3',
+  // здания
+  explosion: 'buildings/explosion',
+  build_start: 'buildings/build_start',
+  build_complete: 'buildings/build_complete',
+  click_building: 'buildings/click_building',
+  cc_ready: 'buildings/cc_ready',
+  barracks_ready: 'buildings/barracks_ready',
+  factory_ready: 'buildings/factory_ready',
+  starport_ready: 'buildings/starport_ready',
+  turret_shoot: 'units/turret_shoot',
 
-  voice_marine_select: 'assets/sounds/voices/marine/select.mp3',
-  voice_marine_order:  'assets/sounds/voices/marine/order.mp3',
-  voice_ghost_select:  'assets/sounds/voices/ghost/select.mp3',
-  voice_tank_select:   'assets/sounds/voices/tank/select.mp3'
+  // дополнительные события
+  wave_start: 'ui/wave_start',     // началась волна врагов
+  victory: 'ui/victory',
+  defeat: 'ui/defeat',
+
+  // рабочий
+  scv_death: 'units/scv_death',
+  voice_scv_select: 'voices/scv/select',
+  voice_scv_order: 'voices/scv/order'
 };
 
-const MUSIC = {
-  music_menu:      'assets/sounds/music/menu.mp3',
-  music_classic:   'assets/sounds/music/classic.mp3',
-  music_canyon:    'assets/sounds/music/canyon.mp3',
-  music_islands:   'assets/sounds/music/islands.mp3',
-  music_labyrinth: 'assets/sounds/music/labyrinth.mp3'
-};
-const MUSIC_FALLBACK = 'music_classic';
+for (const u of UNITS) {
+  SFX_SLOTS[`${u}_shoot`] = `units/${u}_shoot`;
+  SFX_SLOTS[`${u}_death`] = `units/${u}_death`;
+  SFX_SLOTS[`voice_${u}_select`] = `voices/${u}/select`;
+  SFX_SLOTS[`voice_${u}_order`] = `voices/${u}/order`;
+}
+SFX_SLOTS.medic_heal = 'units/medic_heal';
 
+// Если своего файла нет — играем другой звук
+const SFX_FALLBACK = {
+  turret_shoot: 'tank_shoot',
+  wave_start: 'ui_alert',
+  ui_select: 'ui_click',
+  ui_order: 'ui_click',
+  click_building: 'ui_click',
+  ui_build_complete: 'ui_ready',
+  build_complete: 'ui_ready'
+};
+
+const MUSIC_SLOTS = {
+  music_menu: 'music/menu',
+  music_classic: 'music/classic',
+  music_canyon: 'music/canyon',
+  music_islands: 'music/islands',
+  music_labyrinth: 'music/labyrinth',
+  music_survival: 'music/survival',  // режим «Выживание»
+  music_battle: 'music/battle'
+};
+const MUSIC_FALLBACK = {
+  music_survival: 'music_labyrinth',
+  music_battle: 'music_classic'
+};
+const DEFAULT_MUSIC = 'music_classic';
+
+const EXT_ORDER = ['.mp3', '.ogg', '.wav'];
 const MAX_VOICES = 16;        // одновременно звучащих эффектов
 const SAME_SOUND_GAP = 0.06;  // сек — не накладываем один и тот же звук чаще
 
 let ctx = null;
 let masterGain = null, sfxGain = null, musicGain = null;
+const paths = {};     // ключ -> полный путь к файлу (после чтения списка)
 const rawData = {};   // key -> Promise<ArrayBuffer>
 const buffers = {};   // key -> AudioBuffer
 const decoding = {};
 const lastPlayed = {};
 let activeVoices = 0;
+let indexReady = false;
+let pendingMusic = null;
 
 let musicEl = null;
 let musicKey = null;
@@ -113,12 +158,51 @@ function unlock() {
   }
 }
 
+// Какие файлы реально есть: сервер/сборка отдаёт список assets/sounds/index.json.
+// Если списка нет — пробуем стандартные имена .mp3 (несуществующие тихо пропускаются).
+function loadIndex() {
+  return fetch('assets/sounds/index.json')
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error('no index'))))
+    .then((files) => {
+      const byBase = {};
+      for (const f of files) {
+        const dot = f.lastIndexOf('.');
+        const base = f.slice(0, dot);
+        const ext = f.slice(dot).toLowerCase();
+        if (!byBase[base] || EXT_ORDER.indexOf(ext) < EXT_ORDER.indexOf(byBase[base].ext)) {
+          byBase[base] = { ext, file: f };
+        }
+      }
+      return (slot) => (byBase[slot] ? 'assets/sounds/' + byBase[slot].file : null);
+    })
+    .catch(() => (slot) => 'assets/sounds/' + slot + '.mp3');
+}
+
 export function initAudio() {
-  for (const key in SFX) {
-    rawData[key] = fetch(SFX[key])
-      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('404'))));
-    rawData[key].catch(() => {});
-  }
+  loadIndex().then((resolve) => {
+    for (const key in SFX_SLOTS) {
+      const p = resolve(SFX_SLOTS[key]);
+      if (p) paths[key] = p;
+    }
+    for (const key in MUSIC_SLOTS) {
+      const p = resolve(MUSIC_SLOTS[key]);
+      if (p) paths[key] = p;
+    }
+    for (const key in SFX_SLOTS) {
+      if (!paths[key]) continue;
+      rawData[key] = fetch(paths[key])
+        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('404'))));
+      rawData[key].catch(() => {});
+    }
+    indexReady = true;
+    if (ctx) for (const key in rawData) decode(key);
+    if (pendingMusic) {
+      const k = pendingMusic;
+      pendingMusic = null;
+      playMusic(k);
+    }
+  });
+
   const opts = { capture: true, passive: true };
   window.addEventListener('pointerdown', unlock, opts);
   window.addEventListener('touchend', unlock, opts);
@@ -128,13 +212,15 @@ export function initAudio() {
 export function playSound(key, volume = null) {
   if (muted || suspendReasons.size > 0) return;
   if (!ctx || ctx.state !== 'running') return;
-  const buf = buffers[key];
-  if (!buf) { decode(key); return; }
+  let k = key;
+  if (!buffers[k] && !rawData[k] && SFX_FALLBACK[k]) k = SFX_FALLBACK[k];
+  const buf = buffers[k];
+  if (!buf) { decode(k); return; }
 
   const now = ctx.currentTime;
-  if (lastPlayed[key] && now - lastPlayed[key] < SAME_SOUND_GAP) return;
+  if (lastPlayed[k] && now - lastPlayed[k] < SAME_SOUND_GAP) return;
   if (activeVoices >= MAX_VOICES) return;
-  lastPlayed[key] = now;
+  lastPlayed[k] = now;
 
   try {
     const src = ctx.createBufferSource();
@@ -149,17 +235,28 @@ export function playSound(key, volume = null) {
   } catch (e) {}
 }
 
-export function playMusic(key = MUSIC_FALLBACK) {
-  if (!MUSIC[key]) key = MUSIC_FALLBACK;
-  if (musicKey === key && musicEl) {
+function musicPath(key) {
+  let k = key;
+  for (let i = 0; i < 3 && k; i++) {
+    if (paths[k]) return { key: k, path: paths[k] };
+    k = MUSIC_FALLBACK[k];
+  }
+  return paths[DEFAULT_MUSIC] ? { key: DEFAULT_MUSIC, path: paths[DEFAULT_MUSIC] } : null;
+}
+
+export function playMusic(key = DEFAULT_MUSIC) {
+  if (!indexReady) { pendingMusic = key; return; }
+  const found = musicPath(key);
+  if (!found) return;
+  if (musicKey === found.key && musicEl) {
     if (musicEl.paused && suspendReasons.size === 0) musicEl.play().catch(() => {});
     return;
   }
   stopMusic();
-  musicKey = key;
+  musicKey = found.key;
 
   const el = new Audio();
-  el.src = MUSIC[key];
+  el.src = found.path;
   el.loop = true;
   el.preload = 'auto';
   musicEl = el;
@@ -180,6 +277,7 @@ export function playMusic(key = MUSIC_FALLBACK) {
 }
 
 export function stopMusic() {
+  pendingMusic = null;
   if (musicEl) {
     musicEl.pause();
     musicEl.removeAttribute('src');
