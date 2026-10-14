@@ -5,7 +5,8 @@ import { loadProgress, progress, checkDaily, saveProgress, flushCloudSave } from
 import { openShop } from './shop.js';
 import { openAchievements } from './achievements_screen.js';
 import { loadAllModels } from './models.js';
-import { showAlert, showConfirm } from './ui.js';
+import { showAlert, showConfirm, showPrompt, showMatchSetup } from './ui.js';
+import { getNick, setNick, cleanNick, getStartRes, setStartRes } from './profile.js';
 import { showRewardedAd, isYandexReady } from './yandex.js';
 import { session } from './session.js';
 import { initLobby, openLobby } from './lobby.js';
@@ -77,7 +78,8 @@ export async function requestRestart() {
   sessionSet(AUTOSTART_KEY, JSON.stringify({
     mode: session.mode,
     mapId: selectedMapId,
-    missionId: window._campaignMissionId || null
+    missionId: window._campaignMissionId || null,
+    res: session.startRes
   }));
   await Promise.race([flushCloudSave(), new Promise((r) => setTimeout(r, 1500))]);
   location.reload();
@@ -96,6 +98,7 @@ export function tryAutostart() {
   sessionRemove(AUTOSTART_KEY);
   try {
     const data = JSON.parse(raw);
+    session.startRes = data.res || getStartRes();
     if (data.mode === 'survival') {
       session.mode = 'survival';
       window._campaignMissionId = null;
@@ -120,6 +123,24 @@ function launchGame() {
   stopMenu3D();
   hideAllMenus();
   if (onStartGame) onStartGame();
+}
+
+// Окно «со скольких ресурсов начать» → запуск матча. false — игрок отменил.
+async function setupAndLaunch(title) {
+  const res = await showMatchSetup(getStartRes(), { title });
+  if (!res) return false;
+  session.startRes = setStartRes(res);
+  launchGame();
+  return true;
+}
+
+// Обучение: фиксированные ресурсы, чтобы хватило на всё, что показываем
+export function startTutorialGame() {
+  session.mode = 'tutorial';
+  session.players = ['p1'];
+  window._campaignMissionId = null;
+  session.startRes = { minerals: 350, vespene: 0 };
+  launchGame();
 }
 
 // Запуск из лобби (игра по сети) — те же шаги, что и у обычного старта
@@ -152,6 +173,17 @@ export function initMenu(startGameCallback) {
 
   const statsEl = document.createElement('div');
   statsEl.id = 'menu-stats';
+  statsEl.title = 'Нажмите, чтобы сменить ник';
+  statsEl.addEventListener('click', async () => {
+    const v = await showPrompt('Ваш ник (его увидят друзья в игре по сети):', {
+      value: getNick(), okText: 'Сохранить', cancelText: 'Отмена', placeholder: 'Ваш ник'
+    });
+    if (v === null) return;
+    setNick(cleanNick(v) || 'Игрок');
+    const input = document.getElementById('net-nick');
+    if (input) input.value = getNick();
+    updateMenuStats();
+  });
   document.body.appendChild(statsEl);
   updateMenuStats();
 
@@ -168,11 +200,15 @@ export function initMenu(startGameCallback) {
 
   initLobby({ startGame: launchFromLobby, showScreen });
 
+  document.getElementById('menu-tutorial')?.addEventListener('click', () => {
+    playClick();
+    startTutorialGame();
+  });
   document.getElementById('menu-survival')?.addEventListener('click', () => {
     playClick();
     session.mode = 'survival';
     window._campaignMissionId = null;
-    launchGame();
+    setupAndLaunch('Выживание');
   });
   // На Яндекс Играх своего сервера нет — игру по сети не показываем
   const netBtn = document.getElementById('menu-network');
@@ -259,7 +295,9 @@ function bindSlider(id, labelId, get, set, format) {
 
 export function updateMenuStats() {
   const statsEl = document.getElementById('menu-stats');
-  if (statsEl) statsEl.textContent = `🏆 ${progress.wins}   💀 ${progress.losses}   💰 ${progress.money}`;
+  if (!statsEl) return;
+  const nick = getNick();
+  statsEl.textContent = (nick ? `👤 ${nick}   ` : '') + `🏆 ${progress.wins}   💀 ${progress.losses}   💰 ${progress.money}`;
 }
 
 const DIFFS = [
@@ -336,7 +374,7 @@ function renderMapList() {
       saveSettings();
       session.mode = 'skirmish';
       window._campaignMissionId = null;
-      launchGame();
+      setupAndLaunch(map.name);
     });
 
     list.appendChild(card);
@@ -420,7 +458,7 @@ function renderCampaignList() {
         selectedMapId = m.mapId;
         saveSettings();
         session.mode = 'campaign';
-        launchGame();
+        setupAndLaunch(`Миссия ${id}: ${m.name}`);
       });
     }
 

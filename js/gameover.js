@@ -18,6 +18,7 @@ function hasCC(team) {
 // Проверка на хосте/в одиночной игре
 export function checkGameOver(extra = {}) {
   if (gameOver) return;
+  if (session.mode === 'tutorial') return; // в обучении конец игры не проверяем
 
   if (isSurvivalMode()) {
     if (!hasCC('player')) {

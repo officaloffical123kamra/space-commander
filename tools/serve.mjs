@@ -81,6 +81,8 @@ const server = http.createServer((req, res) => {
 // Сервер только пересылает сообщения и подписывает, от кого пришёл приказ.
 // ============================================================
 
+// Версия протокола: клиент проверяет её, чтобы не работать со старым сервером
+const VERSION = 3;
 const SLOTS = ['p2', 'p3', 'p4'];
 const wss = new WebSocketServer({ server, path: '/ws' });
 let host = null;
@@ -101,6 +103,19 @@ function send(ws, obj) {
 
 function slotsList() {
   return ['p1', ...SLOTS.filter((s) => guests.has(s))];
+}
+
+// Состояние комнаты для экрана «Игра по сети»
+function roomStatus() {
+  const slots = slotsList();
+  const nm = {};
+  for (const s of slots) nm[s] = names.get(s) || 'Игрок ' + s.slice(1);
+  const exists = !!host && host.readyState === 1;
+  return {
+    t: 'room', ver: VERSION, exists, started: exists && started,
+    mode: hostInfo && hostInfo.mode, mapId: hostInfo && hostInfo.mapId,
+    slots: exists ? slots : [], names: exists ? nm : {}
+  };
 }
 
 function broadcastPlayers() {
@@ -141,33 +156,45 @@ function leave(ws) {
   console.log(`Игрок ${slot} вышел из игры`);
 }
 
-// Проверка связи: телефон уснул или пропал Wi-Fi — через ~15 секунд игрок считается вышедшим
+// Проверка связи: телефон уснул или пропал Wi-Fi — через минуту тишины игрок считается вышедшим.
+// Таймаут большой, чтобы не отключать слабые устройства, которые просто сильно нагружены.
 const HEARTBEAT_MS = 5000;
+const SNAP_BACKLOG_BYTES = 200 * 1024;
+const HEARTBEAT_TIMEOUT_MS = Number(process.env.HEARTBEAT_TIMEOUT) || 60000;
 setInterval(() => {
+  const now = Date.now();
   for (const ws of wss.clients) {
-    if (ws.isAlive === false) { ws.terminate(); continue; }
-    ws.isAlive = false;
+    if (now - (ws.lastPong || now) > HEARTBEAT_TIMEOUT_MS) { ws.terminate(); continue; }
     try { ws.ping(); } catch (e) {}
   }
 }, HEARTBEAT_MS).unref();
 
 wss.on('connection', (ws) => {
-  ws.isAlive = true;
-  ws.on('pong', () => { ws.isAlive = true; });
+  ws.lastPong = Date.now();
+  ws.on('pong', () => { ws.lastPong = Date.now(); });
   ws.on('message', (data) => {
     const text = data.toString();
     let msg;
     try { msg = JSON.parse(text); } catch (e) { return; }
 
+    if (msg.t === 'status') {
+      send(ws, roomStatus());
+      return;
+    }
+
     if (msg.t === 'host') {
-      if (host && host !== ws) closeRoom();
+      // Чужую открытую игру не перехватываем — иначе вошедшие вылетели бы
+      if (host && host !== ws && host.readyState === 1) {
+        send(ws, { ...roomStatus(), t: 'room-taken' });
+        return;
+      }
       host = ws;
       hostInfo = { mode: msg.mode, mapId: msg.mapId };
       started = false;
       guests.clear();
       names.clear();
       names.set('p1', cleanName(msg.name, 'p1'));
-      send(ws, { t: 'hosted', addresses: lanAddresses().map((a) => `${a}:${PORT}`) });
+      send(ws, { t: 'hosted', ver: VERSION, addresses: lanAddresses().map((a) => `${a}:${PORT}`) });
       broadcastPlayers();
       console.log(`Создана игра по сети: ${msg.mode}`);
       return;
@@ -179,7 +206,7 @@ wss.on('connection', (ws) => {
       if (!slot) { send(ws, { t: 'busy' }); return; }
       guests.set(slot, ws);
       names.set(slot, cleanName(msg.name, slot));
-      send(ws, { t: 'joined', slot, ...hostInfo });
+      send(ws, { t: 'joined', ver: VERSION, slot, ...hostInfo });
       broadcastPlayers();
       console.log(`Игрок ${slot} (${names.get(slot)}) присоединился`);
       return;
@@ -211,7 +238,10 @@ wss.on('connection', (ws) => {
       // msg.to — кому (слот или список слотов); без него — всем друзьям
       const to = msg.to == null ? null : [].concat(msg.to);
       for (const [slot, g] of guests) {
-        if (!to || to.includes(slot)) send(g, text);
+        if (to && !to.includes(slot)) continue;
+        // Медленному устройству не копим очередь устаревших снимков: следующий снимок всё равно новее
+        if (msg.t === 'snap' && g.bufferedAmount > SNAP_BACKLOG_BYTES) continue;
+        send(g, text);
       }
       return;
     }

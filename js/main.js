@@ -3,30 +3,32 @@ import * as THREE from 'three';
 import { createScene, createCamera, createRenderer, createCommandCenter, createMineralPatch, createGeyser } from './scene.js';
 import { createTerrain } from './terrain.js';
 import { createDecor } from './decor.js';
-import { updateUnits, units, setBuildingsProvider, combatStats, isHiddenFrom } from './units.js';
+import { updateUnits, units, setBuildingsProvider, combatStats, isHiddenFrom, makeUnit, drawHpBar } from './units.js';
 import { setupControls } from './controls.js';
-import { state, createWorker, updateWorker, updateHud, updateArmyHud } from './economy.js';
+import { state, createWorker, updateWorker, updateHud, updateArmyHud, getEco } from './economy.js';
 import { updateBuildings, updateConstructions, checkGarrisonArrival, buildings, commandCenters, updateRepairs, updateSensorRadars, showHint, createTurret } from './build.js';
 import { createBot, updateBot } from './bot.js';
 import { updatePortrait, updateSelectionRings, selection, updateQueueOnly, pruneSelection, renderBuildRow } from './selection.js';
 import { drawMinimap } from './minimap.js';
-import { initFog, tickFog, isVisible, isExplored } from './fog.js';
+import { initFog, tickFog, isVisible, isExplored, setFogVisible } from './fog.js';
 import { initAudio, playMusic, playSound, setMuted, isMuted, suspendAudio, resumeAudio } from './audio.js';
 import { checkGameOver, isGameOver, forceGameOver, getGameResult, isLocalWin } from './gameover.js';
-import { initMenu, settings, getSelectedMap, getSelectedDifficulty, tryAutostart, returnToMenu } from './menu.js';
+import { initMenu, settings, getSelectedMap, getSelectedDifficulty, tryAutostart, returnToMenu, startTutorialGame, updateMenuStats } from './menu.js';
 import { getMap } from './maps.js';
 import { loadAllModels } from './models.js';
 import { initGroups } from './groups.js';
 import { initPause, isPaused, setGameActive, setSystemPause, openPauseMenu } from './pause.js';
 import { startTutorial, updateTutorial, isTutorialDone } from './tutorial.js';
+import { getNick, setNick, cleanNick } from './profile.js';
+import { storageGet, storageSet } from './storage.js';
 import { trackArmySize, trackResources, onWin, onLoss } from './achievements.js';
 import { loadProgress, addWin, addLoss, addMoney, progress, saveProgress, initCloudSync, flushCloudSave } from './progress.js';
 import { applySkinToAllPlayerUnits, tickBuildingParticles } from './skin_apply.js';
 import { spawnBossWave } from './bosses.js';
 import { completeMission, getCampaignDifficulty, getMissionById } from './campaign.js';
-import { initYandex, notifyGameReady, showFullscreenAd, onSystemPause } from './yandex.js';
+import { initYandex, notifyGameReady, showFullscreenAd, onSystemPause, getPlayerName } from './yandex.js';
 import { geysers } from './world.js';
-import { IS_TOUCH, showAlert, showMessage } from './ui.js';
+import { IS_TOUCH, showAlert, showMessage, showConfirm, showPrompt } from './ui.js';
 import { session, isNetGame, isSurvivalMode, isFriendly, setRemoteNotify, teamOfCtrl, nameOf } from './session.js';
 import { setCommandScene, executeCommand } from './commands.js';
 import { initSurvival, updateSurvival, getSurvivalInfo, SURVIVAL_MAP, SURVIVAL_EXTRA, getSurvivalBases, ARENA } from './survival.js';
@@ -152,7 +154,9 @@ function startGame() {
   }
 
   let map;
+  session.noFog = session.mode === 'tutorial';
   if (isSurvivalMode()) map = SURVIVAL_MAP;
+  else if (session.mode === 'tutorial') map = getMap('classic');
   else if (session.mode === 'pvp') map = getMap(session.mapId);
   else map = getMap(mission ? mission.mapId : getSelectedMap());
 
@@ -168,6 +172,11 @@ function startGame() {
     setCommandScene(scene);
 
     const home = setupWorld(map);
+    applyStartResources();
+    // В обучении рабочий сначала стоит без дела — игрок сам отправит его добывать
+    if (session.mode === 'tutorial') {
+      for (const u of units) if (u.isWorker && u.ctrl === 'p1') { u.state = 'idle'; u.minerals = null; }
+    }
 
     if (bot) bindBotEvents(map);
     bindSurvivalEvents();
@@ -214,9 +223,70 @@ function startGame() {
     setGameActive(true);
     animate();
 
-    const singlePlayer = !isNetGame() && (session.mode === 'skirmish' || session.mode === 'campaign');
-    if (singlePlayer && !isTutorialDone()) startTutorial();
+    if (session.mode === 'tutorial') {
+      startTutorial({
+        spawnEnemies: spawnTutorialEnemies,
+        finish: onTutorialFinished,
+        skip: () => {
+          showAlert('Обучение пропущено. Его можно пройти в главном меню: «📘 Обучение».', 'info', 5000);
+        }
+      });
+    }
   });
+}
+
+// Туман войны: настройка игрока, но не в обучении
+function fogActive() {
+  return !!settings.fogEnabled && !session.noFog;
+}
+
+// Стартовые ресурсы матча (окно настройки перед стартом; по умолчанию 150 минералов, 0 газа)
+function applyStartResources() {
+  const res = session.startRes || { minerals: 150, vespene: 0 };
+  for (const c of session.players) {
+    const eco = getEco(c);
+    if (eco) { eco.minerals = res.minerals; eco.vespene = res.vespene; }
+  }
+}
+
+// ============================================================
+// ОБУЧЕНИЕ
+// ============================================================
+let tutorialEnemiesSpawned = false;
+
+function spawnTutorialEnemies() {
+  if (tutorialEnemiesSpawned) return;
+  tutorialEnemiesSpawned = true;
+  const spots = [{ x: -6, z: -6 }, { x: -4, z: -9 }, { x: -9, z: -4 }];
+  for (const p of spots) {
+    const u = makeUnit(scene, p.x, p.z, 'marine', false, 'marine', 'ai');
+    // Слабые враги: чтобы победить смог даже новичок
+    u.maxHp = 45; u.hp = 45; u.attack = 4; u.baseData.attack = 4;
+    drawHpBar(u);
+  }
+  if (controls) controls.focusOn(-7, -7);
+  showAlert('👀 Враги у центра карты (красные)', 'warn', 4000);
+}
+
+function tutorialInfo() {
+  const mine = (u) => u.ctrl === 'p1' && u.hp > 0;
+  return {
+    workerSelected: selection.units.some((u) => u.isWorker),
+    workerMining: units.some((u) => mine(u) && u.isWorker && (u.state === 'mining' || u.state === 'to_cc')),
+    storage: buildings.some((b) => b.type === 'storage' && b.ctrl === 'p1' && b.hp > 0),
+    barracks: buildings.some((b) => b.type === 'barracks' && b.ctrl === 'p1' && b.hp > 0),
+    marines: units.filter((u) => mine(u) && u.type === 'marine').length,
+    enemiesSpawned: tutorialEnemiesSpawned,
+    enemies: units.filter((u) => !u.isPlayer && !u.isWorker && u.hp > 0).length
+  };
+}
+
+async function onTutorialFinished(reward) {
+  const text = '🎉 Обучение пройдено!\n\nТеперь вы умеете добывать минералы, строить здания, обучать бойцов и побеждать врагов.' +
+    (reward ? `\n\nНаграда: +${reward}💰` : '');
+  const toMenu = await showConfirm(text, { okText: 'В главное меню', cancelText: 'Продолжить играть' });
+  updateMenuStats();
+  if (toMenu) returnToMenu();
 }
 
 // ============================================================
@@ -348,9 +418,31 @@ function bootMenu() {
   if (booted) return;
   booted = true;
   initMenu(startGame);
-  tryAutostart();
+  const autostarted = tryAutostart();
   document.getElementById('splash-screen')?.remove();
   notifyGameReady();
+  if (!autostarted) onboard();
+}
+
+// Первый запуск: спрашиваем ник и предлагаем пройти обучение
+async function onboard() {
+  if (!getNick()) {
+    const v = await showPrompt('Добро пожаловать! Как вас зовут? Этот ник увидят друзья в игре по сети.', {
+      value: getPlayerName(), okText: 'Продолжить', placeholder: 'Ваш ник'
+    });
+    setNick(cleanNick(v) || 'Игрок');
+    const input = document.getElementById('net-nick');
+    if (input) input.value = getNick();
+    updateMenuStats();
+  }
+  if (!isTutorialDone() && !storageGet('rts_tut_offered')) {
+    storageSet('rts_tut_offered', '1');
+    const yes = await showConfirm(
+      'Вы здесь впервые? Пройдите короткое обучение (около 3 минут): научитесь добывать минералы, строить здания, обучать бойцов и побеждать врагов.',
+      { okText: 'Пройти обучение', cancelText: 'Пропустить' }
+    );
+    if (yes) startTutorialGame();
+  }
 }
 
 // Реклама и пауза от платформы: стоп игре и звуку
@@ -388,7 +480,7 @@ let clock = null;
 let geyserTime = 0;
 
 function applyFogVisibility() {
-  const fogOn = settings.fogEnabled;
+  const fogOn = fogActive();
   for (const u of units) {
     if (!u || !u.mesh) continue;
     if (u.inBunker) { u.mesh.visible = false; continue; }
@@ -534,7 +626,9 @@ function updateHudTimers(dtRaw) {
 
 function updateVisuals(dt) {
   animateGeysers(dt);
-  if (settings.fogEnabled) tickFog(dt, units, buildings, commandCenters);
+  const fog = fogActive();
+  setFogVisible(fog);
+  if (fog) tickFog(dt, units, buildings, commandCenters);
   applyFogVisibility();
 
   skinTimer += dt;
@@ -603,14 +697,7 @@ function animate() {
 
   updateVisuals(dt);
 
-  if (!isNetGame() && !isTutorialDone() && (session.mode === 'skirmish' || session.mode === 'campaign')) {
-    updateTutorial({
-      hasWorkerSelected: selection.units.some(u => u.isWorker),
-      hasMining: selection.units.some(u => u.isWorker && u.state === 'to_minerals'),
-      hasBarracks: buildings.some(b => b.type === 'barracks' && b.ctrl === 'p1'),
-      hasArmy: units.some(u => u.ctrl === 'p1' && !u.isWorker)
-    });
-  }
+  if (session.mode === 'tutorial') updateTutorial(tutorialInfo());
 
   trackResources(state.minerals, state.vespene);
 

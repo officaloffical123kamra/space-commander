@@ -14,6 +14,8 @@ export const session = {
   localCtrl: 'p1',
   localTeam: 'player',
   players: ['p1'],    // кто участвует в матче, по порядку мест
+  startRes: { minerals: 150, vespene: 0 }, // стартовые ресурсы матча
+  noFog: false,       // true — без тумана войны (обучение)
   actor: null         // чей приказ сейчас выполняется (для подсказок по сети)
 };
 

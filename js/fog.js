@@ -43,6 +43,11 @@ export function initFog(scene) {
   renderFog();
 }
 
+// Показать/скрыть тёмный слой тумана (в обучении и при выключенном тумане карта открыта)
+export function setFogVisible(v) {
+  if (fogMesh) fogMesh.visible = !!v;
+}
+
 export function updateFog(units, buildings, commandCenters) {
   for (let i = 0; i < visible.length; i++) visible[i] = 0;
 

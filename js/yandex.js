@@ -199,3 +199,8 @@ export async function loadFromCloud() {
     return null;
   }
 }
+
+// Имя игрока в Яндексе (если вошёл в аккаунт) — подсказка для ника
+export function getPlayerName() {
+  try { return (player && player.getName && player.getName()) || ''; } catch (e) { return ''; }
+}

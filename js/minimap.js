@@ -34,7 +34,7 @@ export function drawMinimap(camera) {
   ctx.stroke();
 
   const toPx = (v) => ((v + MAP_SIZE / 2) / MAP_SIZE) * MINIMAP_PX;
-  const fogOn = settings.fogEnabled;
+  const fogOn = settings.fogEnabled && !session.noFog;
   const seen = (x, z) => !fogOn || isVisible(x, z);
 
   // Туман: одна отрисовка готового холста вместо 3600 прямоугольников

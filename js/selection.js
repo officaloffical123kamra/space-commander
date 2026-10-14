@@ -333,6 +333,7 @@ export function renderBuildRow() {
   for (const item of list) {
     const btn = document.createElement('button');
     btn.className = 'action-btn';
+    btn.dataset.build = item.id;
 
     const available = canBuildType(item.id);
 
@@ -609,6 +610,7 @@ function renderProductionQueue(row, building) {
 function makeProduceBtn(icon, label, cost, type, building) {
   const btn = document.createElement('button');
   btn.className = 'action-btn';
+  btn.dataset.produce = type;
   btn.innerHTML = `<div class="btn-icon">${icon}</div><div class="btn-label">${label}</div><div class="btn-cost">${cost}</div>`;
   btn.addEventListener('click', () => actionHandlers.produce?.(type, building));
   return btn;

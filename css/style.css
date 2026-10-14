@@ -1545,3 +1545,65 @@ body.touch .desktop-only { display: none; }
 .pchip.ally { color: #7ae0a0; border-color: #3a9a66; }
 .pchip.enemy { color: #ff8a8a; border-color: #aa4455; }
 .pchip.off { opacity: 0.4; text-decoration: line-through; }
+
+/* === Окна: ввод ника, настройка ресурсов === */
+.ui-modal-box.wide { width: min(560px, 100%); }
+.ui-modal-title { color: #e0c088; font-size: 18px; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 10px; }
+.ui-modal-text.small { font-size: 12px; color: #a89060; margin-bottom: 14px; }
+.ui-modal-input {
+  width: 100%; padding: 12px; margin: 0 0 16px; font-family: inherit; font-size: 16px; text-align: center;
+  background: rgba(10,8,6,0.95); border: 1px solid rgba(200,152,72,0.6); color: #fff4d8;
+  user-select: text; -webkit-user-select: text;
+}
+.ui-modal-input:focus { outline: none; border-color: #ffcc44; }
+.res-setup { text-align: left; margin-bottom: 18px; }
+.res-row { display: grid; grid-template-columns: 130px 1fr 52px; gap: 12px; align-items: center; margin-bottom: 12px; }
+.res-label { color: #d8c898; font-size: 12px; font-weight: bold; }
+.res-row input[type="range"] { width: 100%; accent-color: var(--gold); height: 6px; cursor: pointer; }
+.res-value { color: #ffcc44; font-weight: bold; text-align: right; font-size: 14px; }
+.res-presets { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.ui-modal-btn.res-preset { min-width: 0; min-height: 34px; padding: 6px 12px; font-size: 12px; }
+@media (max-width: 520px) { .res-row { grid-template-columns: 1fr 52px; } .res-label { grid-column: 1 / -1; } }
+
+.net-room { max-width: 440px; margin: 0 auto 16px; padding: 14px 18px; text-align: left;
+  background: rgba(20,16,10,0.9); border: 1px solid rgba(200,152,72,0.5); border-left: 3px solid #7ab84a; }
+.net-room-title { color: #e0c088; font-weight: bold; font-size: 15px; margin-bottom: 6px; }
+.net-room-sub { color: #b8a878; font-size: 12px; line-height: 1.6; }
+
+/* === Обучение: подсветка и точки шагов === */
+.tut-glow { animation: tutGlow 1s ease-in-out infinite; border-color: #ffcc44 !important; position: relative; z-index: 2; }
+@keyframes tutGlow {
+  0%, 100% { box-shadow: 0 0 6px rgba(255,204,68,0.5); }
+  50% { box-shadow: 0 0 22px rgba(255,204,68,1), inset 0 0 10px rgba(255,204,68,0.4); }
+}
+.tut-dots { display: flex; gap: 6px; justify-content: center; margin: 6px 0 8px; }
+.tut-dot { width: 22px; height: 5px; background: #3a3020; }
+.tut-dot.done { background: #7ab84a; }
+.tut-dot.now { background: #ffcc44; }
+.tut-step-title { color: #fff4d8; font-weight: bold; font-size: 15px; margin-bottom: 6px; }
+#menu-stats { cursor: pointer; }
+
+/* Подсказка обучения — сверху по центру, не перекрывает игровое поле и не ловит касания */
+#tutorial-box {
+  top: 8px; bottom: auto; width: min(460px, calc(100vw - 340px));
+  pointer-events: none; padding: 10px 16px;
+  background: linear-gradient(180deg, rgba(30,25,18,0.93), rgba(12,10,8,0.96));
+}
+#tutorial-box #tutorial-skip { pointer-events: auto; }
+#tutorial-box .tutorial-title { margin-bottom: 2px; font-size: 11px; letter-spacing: 1px; }
+#tutorial-box .tut-dots { margin: 4px 0 6px; }
+#tutorial-box #tutorial-text { font-size: 13px; line-height: 1.45; }
+@media (max-height: 560px), (max-width: 900px) {
+  #tutorial-box { top: 4px; width: min(420px, calc(100vw - 330px)); padding: 6px 10px; }
+  #tutorial-box #tutorial-text { font-size: 11px; line-height: 1.35; }
+  #tutorial-box .tut-step-title { font-size: 12px; margin-bottom: 2px; }
+  #tutorial-box #tutorial-skip { margin-top: 4px; padding: 3px 8px; font-size: 10px; }
+}
+
+/* «Пропустить» — маленькая кнопка в углу подсказки (не мешает касаниям по игре) */
+#tutorial-box { position: fixed; }
+#tutorial-box #tutorial-skip {
+  position: absolute; top: 3px; right: 4px; margin: 0; padding: 2px 8px; font-size: 10px;
+  background: rgba(0,0,0,0.5); opacity: 0.8;
+}
+#tutorial-box .tutorial-title { padding-right: 130px; }
